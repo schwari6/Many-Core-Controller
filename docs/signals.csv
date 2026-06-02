@@ -1,0 +1,35 @@
+Block,Port Name,Direction,Connected To,Width,Description
+FIFO,clk,in,System,1,Main system clock (300MHz).
+FIFO,rst_n,in,System,1,Active-low asynchronous reset signal.
+FIFO,cfg_en,in,HOST,1,Enable signal for writing a new task to the FIFO from the host.
+FIFO,cfg_data,in,HOST,64,"Data payload: 32b Addr, 10b ID, 10b Quota, 10b Dep, 2b Rsvd."
+FIFO,full,out,HOST,1,Hardware flag indicating the FIFO is full and cannot accept more tasks.
+FIFO,fifo_tmt_data,out,TMT,64,Data payload extracted from the FIFO to the TMT logic.
+FIFO,empty,out,TMT,1,Flag indicating no tasks are waiting in the FIFO.
+FIFO,tmt_fifo_ack,in,TMT,1,Acknowledge signal from the TMT to pop a task (POP operation).
+TMT,fifo_tmt_data,in,FIFO,64,Data payload arriving from the FIFO.
+TMT,empty,in,FIFO,1,Flag indicating the FIFO is empty.
+TMT,tmt_fifo_ack,out,FIFO,1,Request signal to pull a new task into the TMT.
+TMT,ava_core_id,in,CMT,6,Serial ID of the selected available core.
+TMT,ava_core_valid,in,CMT,1,Indication from the CMT that a valid idle core is ready.
+TMT,task_id_tmt_cmt,out,CMT,10,Task ID assigned to the core provided by the CMT.
+TMT,tmt_cmt_ack,out,CMT,1,Task allocation confirmation (prompts the CMT to set the core to BUSY).
+TMT,task_done_pulse,in,CMT,1,Single-cycle pulse indicating the CMT processed a task termination.
+TMT,terminated_task_id,in,CMT,10,Task ID of the completed task (used to update TMT counters).
+TMT,dispatch_addr,out,CORES,32,Instruction Pointer address dispatched to the selected core.
+TMT,tmt_idx_tmt_cmt,out,CMT,4,Internal TMT row index (0-15) assigned to the core.
+TMT,terminated_tmt_idx,in,CMT,4,Internal TMT row index of the completed task.
+TMT,dispatch_core_id,out,CORES,6,Specific core ID to which the current task is routed.
+TMT,err,out,Status Reg,2,Hardware error code (e.g. Dependency Deadlock).
+CMT,ava_core_id,out,TMT,6,Serial ID of the idle core found by the CMT.
+CMT,ava_core_valid,out,TMT,1,Indication to the TMT that a valid idle core is available.
+CMT,task_id_tmt_cmt,in,TMT,10,Task ID assigned by the TMT to the core.
+CMT,tmt_cmt_ack,in,TMT,1,Confirmation from the TMT that the task was successfully dispatched.
+CMT,task_done_pulse,out,TMT,1,Pulse notifying the TMT that a core's task termination was processed.
+CMT,terminated_task_id,out,TMT,10,Task ID of the completed task reported to the TMT.
+CMT,core_done_vec,in,CORES,64,Termination vector from all 64 cores (held at '1' until ACK).
+CMT,core_id_cmt_core,out,CORES,6,ID of the core currently being acknowledged for termination.
+CMT,done_ack,out,CORES,1,Acknowledge signal instructing the specific core to lower its Done flag.
+CMT,tmt_idx_tmt_cmt,in,TMT,4,Internal TMT row index assigned by the TMT to the core.
+CMT,terminated_tmt_idx,out,TMT,4,Internal TMT row index of the completed task reported to the TMT.
+CMT,err,out,Status Reg,2,Hardware error code (e.g. Invalid Termination).

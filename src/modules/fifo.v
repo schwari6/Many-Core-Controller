@@ -27,11 +27,11 @@ module fifo #(
     reg [PTR_WIDTH:0] wr_ptr_gray = 0, rd_ptr_gray = 0;
 
     // Write logic
-    always @(posedge clk or negedge reset) begin
-        if (!reset) begin
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
             wr_ptr_bin  <= 0;
             wr_ptr_gray <= 0;
-        end else if (write_en && !full) begin
+        end else if (cfg_en && !full) begin
             FIFO_mem_array[wr_ptr_bin[PTR_WIDTH-1:0]] <= cfg_data;
             wr_ptr_bin  <= wr_ptr_bin + 1;
             wr_ptr_gray <= (wr_ptr_bin + 1) ^ ((wr_ptr_bin + 1) >> 1);
@@ -39,12 +39,12 @@ module fifo #(
     end
 
     // Read logic
-    always @(posedge clk or negedge reset) begin
-        if (!reset) begin
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
             rd_ptr_bin       <= 0;
             rd_ptr_gray      <= 0;
             fifo_tmt_data    <= 0;
-        end else if (read_en && !empty) begin
+        end else if (tmt_fifo_ack && !empty) begin
             fifo_tmt_data    <= FIFO_mem_array[rd_ptr_bin[PTR_WIDTH-1:0]];
             rd_ptr_bin       <= rd_ptr_bin + 1;
             rd_ptr_gray      <= (rd_ptr_bin + 1) ^ ((rd_ptr_bin + 1) >> 1);

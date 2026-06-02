@@ -10,4 +10,5 @@ Hardware design and verification of a high-performance Many-Core Controller for 
 │   ├── tests/           # Specific test cases & corner cases
 │   └── scripts/         # Automation scripts (Python/Tcl)
 ├── docs/                # Architecture Specifications & Block Diagrams
+├── articles/		 # Articles as the base of the project
 └── README.md            # Project description and setup guide
