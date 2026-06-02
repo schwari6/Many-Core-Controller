@@ -1,5 +1,7 @@
+`timescale 1ns / 1ps
+
 module fifo #(
-    parameter FIFO_DEPTH = 100,     //number of RAM rows
+    parameter FIFO_DEPTH = 128,     //number of RAM rows
     parameter FIFO_WIDTH = 64       //size of the DATA from HOST
 )(
     input clk,
@@ -13,7 +15,7 @@ module fifo #(
     // Read Port
     input tmt_fifo_ack,
     output empty,
-    output reg [FIFO_WIDTH-1:0] fifo_tmt_data
+    output wire [FIFO_WIDTH-1:0] fifo_tmt_data
 );
 
     // Calculate pointer width
@@ -26,6 +28,8 @@ module fifo #(
     reg [PTR_WIDTH:0] wr_ptr_bin = 0, rd_ptr_bin = 0;
     reg [PTR_WIDTH:0] wr_ptr_gray = 0, rd_ptr_gray = 0;
 
+    assign fifo_tmt_data = FIFO_mem_array[rd_ptr_bin[PTR_WIDTH-1:0]];
+
     // Write logic
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -34,7 +38,7 @@ module fifo #(
         end else if (cfg_en && !full) begin
             FIFO_mem_array[wr_ptr_bin[PTR_WIDTH-1:0]] <= cfg_data;
             wr_ptr_bin  <= wr_ptr_bin + 1;
-            wr_ptr_gray <= (wr_ptr_bin + 1) ^ ((wr_ptr_bin + 1) >> 1);
+            wr_ptr_gray <= (wr_ptr_bin + 1) ^ (( wr_ptr_bin+ 1) >> 1);
         end
     end
 
@@ -43,9 +47,7 @@ module fifo #(
         if (!rst_n) begin
             rd_ptr_bin       <= 0;
             rd_ptr_gray      <= 0;
-            fifo_tmt_data    <= 0;
         end else if (tmt_fifo_ack && !empty) begin
-            fifo_tmt_data    <= FIFO_mem_array[rd_ptr_bin[PTR_WIDTH-1:0]];
             rd_ptr_bin       <= rd_ptr_bin + 1;
             rd_ptr_gray      <= (rd_ptr_bin + 1) ^ ((rd_ptr_bin + 1) >> 1);
         end
