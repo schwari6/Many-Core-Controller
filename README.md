@@ -5,10 +5,10 @@ Hardware design and verification of a high-performance Many-Core Controller for 
 ## Repository Structure
 ```text
 ├── src/                 # RTL Source Code (Verilog / SystemVerilog)
-│   ├── controller/      # Main Many-Core Controller modules
+│   ├── modules/         # Main Many-Core Controller modules
+├── controller.v         # Top-level RTL of the controller
 ├── tb/                  # Verification Environment (Testbenches)
-│   ├── tests/           # Specific test cases & corner cases
 │   └── scripts/         # Automation scripts (Python/Tcl)
 ├── docs/                # Architecture Specifications & Block Diagrams
-├── articles/		 # Articles as the base of the project
+├── articles/	        	 # The base articles of the project
 └── README.md            # Project description and setup guide
