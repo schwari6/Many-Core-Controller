@@ -292,6 +292,89 @@ module controller_tb();
         finish_active_cores(64'hFFFF_FFFF_FFFF_FFFF); 
         wait_for_cores(0);
 
+        // =====================================================================
+        // TC7: Ghost Dependency (Already Resolved Task)
+        // =====================================================================
+        $display("\n[TC7] Ghost Dependency (Task depends on a task that already finished)...");
+        
+        // 1. Inject Task 3000 and let it finish completely
+        host_send_task(10'd3000, 10'd2, 32'hBEEF_0000, 10'd0);
+        wait_for_cores(2);
+        finish_active_cores(64'hFFFF_FFFF_FFFF_FFFF);
+        wait_for_cores(0);
+        
+        // 2. Wait a few cycles to ensure TRF is clear
+        repeat(10) @(posedge clk);
+        
+        // 3. Inject Task 3001 depending on Task 3000
+        $display("[TC7] Injecting Task 3001 depending on Task 3000 (which is gone).");
+        host_send_task(10'd3001, 10'd4, 32'hBEEF_0001, 10'd3000);
+        
+        // 4. It should allocate IMMEDIATELY because Task 3000 is not in the TRF
+        wait_for_cores(4);
+        $display("[TC7] SUCCESS: Task 3001 correctly ignored the ghost dependency and started!");
+        
+        finish_active_cores(64'hFFFF_FFFF_FFFF_FFFF);
+        wait_for_cores(0);
+
+        // =====================================================================
+        // TC8: Warm Reset Mid-Operation
+        // =====================================================================
+        $display("\n[TC8] Warm Reset Test: Yanking the reset line during heavy load...");
+        
+        // 1. Inject a heavy task to get the system busy
+        host_send_task(10'd4000, 10'd30, 32'hC000_0000, 10'd0);
+        wait_for_cores(30);
+        
+        // 2. BOOM! Hit the reset button asynchronously
+        @(posedge clk);
+        $display("[TC8] ASSERTING RESET!");
+        rst_n = 0;
+        core_done_vec = 0; // Clear the external core signals manually
+        
+        repeat(5) @(posedge clk);
+        rst_n = 1; // Release reset
+        $display("[TC8] RESET RELEASED.");
+        
+        // 3. Wait a few cycles and verify system is completely idle
+        repeat(5) @(posedge clk);
+        if ($countones(uut.inst_cmt.core_busy) == 0 && uut.empty_wire == 1'b1) begin
+            $display("[TC8] SUCCESS: System is totally idle and recovered from Warm Reset.");
+        end else begin
+            $display("[TC8] FAIL: System did not clear properly after reset!");
+        end
+
+        // 4. Prove the system is still alive by sending a new task
+        host_send_task(10'd4001, 10'd5, 32'hC000_0001, 10'd0);
+        wait_for_cores(5);
+        $display("[TC8] SUCCESS: System successfully processed a new task post-reset.");
+        
+        finish_active_cores(64'hFFFF_FFFF_FFFF_FFFF);
+        wait_for_cores(0);
+
+        // =====================================================================
+        // TC9: Circular Dependency Deadlock (Software Bug Injection)
+        // =====================================================================
+        $display("\n[TC9] Circular Deadlock Injection (FDIR Check)...");
+        
+        // We will fill the TRF with 16 tasks that depend on a task that will NEVER exist (Task 9999).
+        // Since TRF will be full (16/16) and NO task will ever be READY, this is a true deadlock.
+        for (int i = 0; i < 16; i++) begin
+            host_send_task(10'd5000 + i, 10'd1, 32'hDEAD_DEAD, 10'd5000 + ((i + 1) % 16)); 
+            // A circle: 5000 depends on 5001, 5001 on 5002... 5015 depends on 5000.
+        end
+        
+        // Wait for them to settle in TRF
+        repeat(20) @(posedge clk);
+        
+        // Check if FDIR caught it. err_bus is {TMT_ERR[1:0], CMT_ERR[1:0]}
+        // We expect TMT_ERR to be 2'b01 (Deadlock). So err_bus should be 4'b0100 (which is 4 in decimal/hex).
+        if (err_bus[3:2] == 2'b01) begin
+            $display("\033[0;32m[TC9] SUCCESS: TMT FDIR correctly detected the Circular Deadlock! (err_bus = %b)\033[0m", err_bus);
+        end else begin
+            $display("\033[0;31m[TC9] FAIL: TMT did not flag the deadlock! (err_bus = %b)\033[0m", err_bus);
+        end
+        
         $display("\n=========================================================");
         $display("   TESTBENCH COMPLETED SUCCESSFULLY");
         $display("=========================================================\n");
