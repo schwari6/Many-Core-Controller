@@ -1,15 +1,16 @@
 `timescale 1ns / 1ps
+`include ../src/cmt.v
 
 module cmt_tb();
 
     // -------------------------------------------------------------------------
-    // 1. אותות השעון והאיפוס (Clock & Reset)
+    // 1. Clock & Reset Signals
     // -------------------------------------------------------------------------
     reg clk;
     reg rst_n;
 
     // -------------------------------------------------------------------------
-    // 2. אותות ממשק אלוקציה (Interface with TMT - Allocation)
+    // 2. Allocation Interface Signals (Interface with TMT)
     // -------------------------------------------------------------------------
     wire        ava_core_valid;
     wire [5:0]  ava_core_id;
@@ -19,25 +20,25 @@ module cmt_tb();
     reg         tmt_cmt_ack;
 
     // -------------------------------------------------------------------------
-    // 3. אותות ממשק סיום משימה (Interface with TMT - Termination)
+    // 3. Termination Interface Signals (Interface with TMT)
     // -------------------------------------------------------------------------
     wire        task_done_pulse;
     wire [3:0]  terminated_tmt_idx;
 
     // -------------------------------------------------------------------------
-    // 4. אותות ממשק מול הליבות (Interface with CORES)
+    // 4. Cores Interface Signals (Interface with CORES)
     // -------------------------------------------------------------------------
     reg  [63:0] core_done_vec;
     wire [5:0]  core_id_cmt_core;
     wire        done_ack;
 
     // -------------------------------------------------------------------------
-    // 5. אותות סטטוס ושגיאות (Status / FDIR)
+    // 5. Status & Error Signals (Status / FDIR)
     // -------------------------------------------------------------------------
     wire [1:0]  err;
 
     // -------------------------------------------------------------------------
-    // 6. חיבור רכיב ה-UUT (Unit Under Test)
+    // 6. Unit Under Test (UUT) Instantiation
     // -------------------------------------------------------------------------
     cmt uut (
         .i_clk(clk),
@@ -65,23 +66,23 @@ module cmt_tb();
     );
 
     // -------------------------------------------------------------------------
-    // 7. יצירת מחולל שעון (Clock Generator - 100MHz / 10ns period)
+    // 7. Clock Generator (100MHz / 10ns period)
     // -------------------------------------------------------------------------
     always begin
         #5 clk = ~clk;
     end
 
     // -------------------------------------------------------------------------
-    // 8. תרחישי הבדיקה (Stimulus / Test Cases)
+    // 8. Stimulus / Test Cases
     // -------------------------------------------------------------------------
-    integer i; // משתנה עזר ללולאות הקצאה
+    integer i; // Loop variable for allocation testing
 
     initial begin
-        // אתחול קבצי ה-VCD לצפייה בגלים (GTKWave) - המקור שלך נשמר!
+        // Initialize VCD files for waveform viewing (GTKWave)
         $dumpfile("cmt_sim.vcd");
         $dumpvars(0, cmt_tb);
 
-        // מצב התחלתי
+        // Initial State
         clk = 0;
         rst_n = 0;
         task_id_tmt_cmt = 10'd0;
@@ -90,13 +91,13 @@ module cmt_tb();
         tmt_cmt_ack = 0;
         core_done_vec = 64'd0;
 
-        // --- תרחיש 0: הפעלת איפוס (Reset) ---
+        // --- TC0: Power-On Reset ---
         #20;
-        rst_n = 1; // יציאה מאיפוס
+        rst_n = 1; // Release reset
         #10;
 
         // =====================================================================
-        // תרחיש 1: אלוקציה רגילה של משימה לליבה הפנויה הראשונה
+        // TC1: Regular allocation of a task to the first available core
         // =====================================================================
         $display("[TC1] Starting Regular Allocation...");
         @(posedge clk);
@@ -113,7 +114,7 @@ module cmt_tb();
         #20;
 
         // =====================================================================
-        // תרחיש 2: אלוקציה של מספר משימות במקביל לבדיקת תפוסת ליבות
+        // TC2: Allocating multiple consecutive tasks to check core occupancy
         // =====================================================================
         $display("[TC2] Starting Multiple Consecutive Allocations...");
         repeat (3) begin
@@ -131,7 +132,7 @@ module cmt_tb();
         end
 
         // =====================================================================
-        // תרחיש 3: סיום משימה של ליבה בודדת ועדכון ה-TMT
+        // TC3: Single core completion and TMT update
         // =====================================================================
         $display("[TC3] Testing Core Termination Handshake...");
         @(posedge clk);
@@ -148,7 +149,7 @@ module cmt_tb();
         #30;
 
         // =====================================================================
-        // תרחיש 4: קונפליקט ובוררות - שתי ליבות מסיימות באותו מחזור שעון
+        // TC4: Conflict and arbitration - two cores finish at the same clock cycle
         // =====================================================================
         $display("[TC4] Testing Simultaneous Core Terminations (Arbitration)...");
         @(posedge clk);
@@ -171,20 +172,20 @@ module cmt_tb();
         #30;
 
         // =====================================================================
-        // תרחיש 5: מצב תפוסה מלאה (Full Core Saturation - 64 Cores Busy)
-        // הסבר: נבצע הקצאות רצופות עד שוקטור הליבות יתמלא לחלוטין.
-        // נבדוק ש-ava_core_valid יורד ל-'0' ושלא ניתן להקצות משימות נוספות.
+        // TC5: Full Core Saturation (64 Cores Busy)
+        // Description: Perform consecutive allocations until all cores are full.
+        // Verify that ava_core_valid drops to '0' and no more tasks can be allocated.
         // =====================================================================
         $display("[TC5] Filling up all remaining cores to reach Saturation...");
         for (i = 0; i < 64; i = i + 1) begin
             @(posedge clk);
             if (ava_core_valid) begin
                 task_id_tmt_cmt = i + 10;
-                tmt_idx_tmt_cmt = i % 16; // חלוקה סבירה לשורות ה-TMT
+                tmt_idx_tmt_cmt = i % 16; // Reasonable distribution across TMT rows
                 instance_num_tmt_cmt = 10'd1;
                 tmt_cmt_ack = 1;
             end else begin
-                // אם הגענו למצב שאין ליבות פנויות, הלולאה תדלג או תעצור
+                // If no cores are available, the loop skips or stops allocation
                 tmt_cmt_ack = 0;
             end
         end
@@ -193,7 +194,7 @@ module cmt_tb();
         tmt_cmt_ack = 0;
         #20;
         
-        // בדיקה האם הרכיב מגן על עצמו ומודיע שאין ליבות פנויות
+        // Check if the component protects itself and correctly signals that no cores are free
         if (!ava_core_valid) begin
             $display("[TC5] Success: All cores are BUSY. ava_core_valid is correctly low ('0').");
         end else begin
@@ -202,21 +203,21 @@ module cmt_tb();
         #20;
 
         // =====================================================================
-        // תרחיש 6: שחרור הדרגתי וזמינות מיידית (Immediate Availability)
-        // הסבר: כשהמערכת מלאה, נשחרר ליבה אחת (למשל ליבה 5) ונראה
-        // ש-ava_core_valid עולה מיד בחזרה במחזור הבא ומציע בדיוק את ליבה 5.
+        // TC6: Gradual release and Immediate Availability
+        // Description: When the system is full, clear a single core (e.g., Core 5)
+        // and verify that ava_core_valid asserts in the next cycle, offering Core 5.
         // =====================================================================
         $display("[TC6] Testing Immediate Availability by clearing Core 5...");
         @(posedge clk);
-        core_done_vec[5] = 1'b1; // ליבה 5 מודיעה שסיימה
+        core_done_vec[5] = 1'b1; // Core 5 signals completion
         
         @(posedge clk);
         #1;
         if (done_ack && (core_id_cmt_core == 6'd5)) begin
-            core_done_vec[5] = 1'b0; // הורדת קו הסיום
+            core_done_vec[5] = 1'b0; // Lower completion line
         end
         
-        // נחכה מחזור שעון אחד לעדכון הסטטוס הפנימי
+        // Wait one clock cycle for internal status update
         @(posedge clk);
         #1;
         if (ava_core_valid && (ava_core_id == 6'd5)) begin
@@ -227,15 +228,15 @@ module cmt_tb();
         #20;
 
         // =====================================================================
-        // תרחיש 7: בדיקת פרוטוקול Handshake מול הליבות (Done -> Ack Handshake)
-        // הסבר: נדמה ליבה שמחזיקה את קו ה-done שלה למשך זמן ארוך (למשל ליבה 10), 
-        // ונראה שה-CMT מוציא רק פולס done_ack אחד ולא מפרש את זה בטעות כסיומים מרובים.
+        // TC7: Done -> Ack Handshake Protocol Verification
+        // Description: Simulate a core holding its done signal high for multiple cycles
+        // (e.g., Core 10), and verify CMT generates only a single done_ack pulse.
         // =====================================================================
         $display("[TC7] Testing Core Handshake duration holding done high...");
         @(posedge clk);
-        core_done_vec[10] = 1'b1; // ליבה 10 מסיימת
+        core_done_vec[10] = 1'b1; // Core 10 finishes
         
-        // נחזיק את הסיגנל גבוה למשך 3 מחזורי שעון בכוונה (ללא תלות ב-ACK)
+        // Intentionally hold the signal high for 3 clock cycles (independent of ACK)
         repeat (3) begin
             @(posedge clk);
             #1;
@@ -245,36 +246,35 @@ module cmt_tb();
         end
         
         @(posedge clk);
-        core_done_vec[10] = 1'b0; // הסרת האות בסוף התהליך
+        core_done_vec[10] = 1'b0; // Clear the signal at the end of the process
         #50;
 
-
         // =====================================================================
-        // תרחיש 8: משימה אחת בעלת כמה חזרות (Multi-Instance / Duplication)
-        // הסבר: משימה בודדת (Task ID = 0x1F) צריכה להתבצע 3 פעמים במקביל.
-        // ה-TMT מקצה אותה ל-3 ליבות שונות בזו אחר זו, ומעדכן את ה-Instance Number.
+        // TC8: Multi-Instance / Duplication (Single Task with Multiple Replicas)
+        // Description: A single task (Task ID = 0x1F) needs to be executed 3 times in parallel.
+        // TMT allocates it to 3 different cores sequentially, updating the Instance Number.
         // =====================================================================
         $display("[TC8] Starting Multi-Instance Allocation for Task 0x1F (3 Instances)...");
         
-        // --- עותק ראשון (Instance 0) ---
+        // --- Instance 0 ---
         @(posedge clk);
         if (ava_core_valid) begin
             $display("[TC8] Allocating Task 0x1F, Instance 0 to Core ID: %d", ava_core_id);
-            task_id_tmt_cmt      = 10'h1F;       // אותו Task ID
-            tmt_idx_tmt_cmt      = 4'd5;         // אותה שורה ב-TMT
+            task_id_tmt_cmt      = 10'h1F;       // Same Task ID
+            tmt_idx_tmt_cmt      = 4'd5;         // Same TMT row
             instance_num_tmt_cmt = 10'd0;        // Instance #0
             tmt_cmt_ack          = 1;
         end
         @(posedge clk);
         tmt_cmt_ack = 0;
-        #10; // המתנה קלה בין הקצאות
+        #10; // Brief delay between allocations
 
-        // --- עותק שני (Instance 1) ---
+        // --- Instance 1 ---
         @(posedge clk);
         if (ava_core_valid) begin
             $display("[TC8] Allocating Task 0x1F, Instance 1 to Core ID: %d", ava_core_id);
-            task_id_tmt_cmt      = 10'h1F;       // אותו Task ID
-            tmt_idx_tmt_cmt      = 4'd5;         // אותה שורה ב-TMT
+            task_id_tmt_cmt      = 10'h1F;       // Same Task ID
+            tmt_idx_tmt_cmt      = 4'd5;         // Same TMT row
             instance_num_tmt_cmt = 10'd1;        // Instance #1
             tmt_cmt_ack          = 1;
         end
@@ -282,12 +282,12 @@ module cmt_tb();
         tmt_cmt_ack = 0;
         #10;
 
-        // --- עותק שלישי (Instance 2) ---
+        // --- Instance 2 ---
         @(posedge clk);
         if (ava_core_valid) begin
             $display("[TC8] Allocating Task 0x1F, Instance 2 to Core ID: %d", ava_core_id);
-            task_id_tmt_cmt      = 10'h1F;       // אותו Task ID
-            tmt_idx_tmt_cmt      = 4'd5;         // אותה שורה ב-TMT
+            task_id_tmt_cmt      = 10'h1F;       // Same Task ID
+            tmt_idx_tmt_cmt      = 4'd5;         // Same TMT row
             instance_num_tmt_cmt = 10'd2;        // Instance #2
             tmt_cmt_ack          = 1;
         end
@@ -295,10 +295,10 @@ module cmt_tb();
         tmt_cmt_ack = 0;
         #30;
 
-        // --- סימולציית סיום הדרגתי של העותקים ---
+        // --- Simulating Gradual Termination of Replicas ---
         $display("[TC8] Simulating termination of the instances...");
         
-        // נניח שהעותק הראשון (נניח שתפס את ליבה 12) מסיים
+        // Assume the first replica (e.g., captured by Core 12) finishes
         @(posedge clk);
         core_done_vec[12] = 1'b1; 
         
@@ -312,9 +312,8 @@ module cmt_tb();
         core_done_vec[12] = 1'b0;
         #20;
 
-
-        // סיום כלל הבדיקות
-        $display("--- All 7 test cases completed successfully! ---");
+        // End of all simulation steps
+        $display("--- All test cases completed successfully! ---");
         $finish;
     end
 
