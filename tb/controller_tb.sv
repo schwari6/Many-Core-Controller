@@ -61,7 +61,7 @@ module controller_tb();
     end
 
     initial begin
-        #500000;
+        #2000000;
         $display("\n\033[0;31m[FATAL] Watchdog Timer Expired!\033[0m");
         $finish;
     end
@@ -71,16 +71,12 @@ module controller_tb();
     // -------------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n) begin
-            // 1. System State Monitoring (Every Clock)
-            // LOG_SYS, Time, ActiveCores, FIFO_Full
             $display("LOG_SYS,%0t,%0d,%b", $time, $countones(uut.inst_cmt.core_busy), full);
             
-            // 2. Allocation Monitoring (When a core is granted by TMT)
             if (uut.tmt_cmt_ack_wire) begin
                 $display("LOG_ALLOC,%0t,%0d,%0d", $time, uut.task_id_tmt_cmt_wire, uut.ava_core_id_wire);
             end
             
-            // 3. Termination Monitoring (When a core is freed by CMT)
             if (done_ack) begin
                 $display("LOG_FREE,%0t,%0d,%0d", $time, 
                          uut.inst_cmt.core_task_id[core_id_cmt_core], 
@@ -103,12 +99,11 @@ module controller_tb();
     // -------------------------------------------------------------------------
     task host_send_task(input [9:0] id, input [9:0] quota, input [31:0] addr, input [9:0] dep);
         if (full) begin
-            $display("[WARN] FIFO Full. Waiting...");
+            $display("[WARN] FIFO Full. Waiting for system to drain...");
             @(negedge full);
         end
         @(posedge clk);
         
-        // Log the injection of the task
         $display("LOG_HOST,%0t,%0d,%0d,%0d", $time, id, quota, dep); 
         
         cfg_data = {id, quota, addr, dep, 2'b00};
@@ -124,6 +119,28 @@ module controller_tb();
             @(posedge clk);
             current_cores = $countones(uut.inst_cmt.core_busy);
         end while (current_cores != target_cores);
+    endtask
+
+    task finish_active_cores(input [63:0] mask);
+        @(posedge clk);
+        core_done_vec |= mask;
+    endtask
+
+    // Random finisher: mimics real-world unpredictable core completion times
+    task run_random_completions(input int cycles);
+        int active_count;
+        repeat(cycles) begin
+            @(posedge clk);
+            for (int i = 0; i < 64; i++) begin
+                // Only finish cores that are currently busy (to avoid FDIR triggers)
+                if (uut.inst_cmt.core_busy[i] == 1'b1 && core_done_vec[i] == 1'b0) begin
+                    // 2% chance per cycle to finish a busy core
+                    if (($urandom() % 100) < 2) begin
+                        core_done_vec[i] <= 1'b1;
+                    end
+                end
+            end
+        end
     endtask
 
     task print_tmt_snapshot();
@@ -153,25 +170,26 @@ module controller_tb();
 
         #30; rst_n = 1; #30;
 
-        // TC1: Sequential Demo & Screenshots
-        $display("[TC1] Generating Data for Project Book Screenshots...");
-        host_send_task(10'd500, 10'd5, 32'h1000_0000, 10'd0); // Independent
-        host_send_task(10'd501, 10'd2, 32'h2000_0000, 10'd500); // Depends on 500
+        // =====================================================================
+        // TC1: Sequential Demo & Screenshots (Sanity)
+        // =====================================================================
+        $display("\n[TC1] Generating Data for Project Book Screenshots...");
+        host_send_task(10'd500, 10'd5, 32'h1000_0000, 10'd0); 
+        host_send_task(10'd501, 10'd2, 32'h2000_0000, 10'd500); 
         
         wait_for_cores(5); 
         #20;
         print_tmt_snapshot();
 
-        @(posedge clk);
-        core_done_vec[4:0] = 5'h1F; // Cores 0-4 finish
+        finish_active_cores(64'h0000_0000_0000_001F); // Cores 0-4
         wait_for_cores(2); 
-        print_tmt_snapshot();
 
-        @(posedge clk);
-        core_done_vec[64:0] = ~64'd0; 
+        finish_active_cores(64'hFFFF_FFFF_FFFF_FFFF); // Clear everything
         wait_for_cores(0);
 
+        // =====================================================================
         // TC2: 64 Cores Saturation
+        // =====================================================================
         $display("\n[TC2] System Stress Test - Saturating all 64 cores...");
         for (int i = 0; i < 8; i++) begin
             host_send_task(10'd10 + i, 10'd8, 32'hAAAA_0000 + i, 10'd0); 
@@ -179,21 +197,100 @@ module controller_tb();
 
         wait_for_cores(64);
         #20;
-        print_tmt_snapshot();
         
         for (int b = 0; b < 4; b++) begin
-            @(posedge clk);
-            core_done_vec[(b*16) +: 16] = 16'hFFFF;
+            finish_active_cores(64'hFFFF << (b*16)); // Finish 16 at a time
             #200; 
         end
         wait_for_cores(0);
 
+        // =====================================================================
         // TC3: FDIR (Fault Detection)
+        // =====================================================================
         $display("\n[TC3] Injecting Fault: Idle core sending termination...");
         @(posedge clk);
         core_done_vec[63] = 1'b1; 
         #50;
         core_done_vec[63] = 1'b0;
+
+        // =====================================================================
+        // TC4: The Dependency Waterfall (A -> B -> C -> D)
+        // =====================================================================
+        $display("\n[TC4] Dependency Waterfall (A -> B -> C -> D)...");
+        host_send_task(10'd800, 10'd2, 32'h8000_0000, 10'd0);   // A
+        host_send_task(10'd801, 10'd3, 32'h8100_0000, 10'd800); // B depends on A
+        host_send_task(10'd802, 10'd4, 32'h8200_0000, 10'd801); // C depends on B
+        host_send_task(10'd803, 10'd5, 32'h8300_0000, 10'd802); // D depends on C
+
+        // A is running (2 cores)
+        wait_for_cores(2);
+        finish_active_cores(64'h0000_0000_0000_0003); // Cores 0-1 finish
+        
+        // B should start (3 cores)
+        wait_for_cores(3);
+        finish_active_cores(64'h0000_0000_0000_001C); // Cores 2-4 finish
+        
+        // C should start (4 cores)
+        wait_for_cores(4);
+        finish_active_cores(64'h0000_0000_0000_01E0); // Cores 5-8 finish
+        
+        // D should start (5 cores)
+        wait_for_cores(5);
+        finish_active_cores(64'hFFFF_FFFF_FFFF_FFFF); // Clear everything
+        wait_for_cores(0);
+
+        // =====================================================================
+        // TC5: TRF Overload & FIFO Backpressure
+        // =====================================================================
+        $display("\n[TC5] TRF Overload & FIFO Backpressure...");
+        // 1 Blocker task that will occupy cores
+        host_send_task(10'd900, 10'd2, 32'h9000_0000, 10'd0);
+        
+        // 15 Tasks that depend on 900 (This fills the remaining 15 TMT slots)
+        for (int i = 1; i <= 15; i++) begin
+            host_send_task(10'd900 + i, 10'd1, 32'h9100_0000, 10'd900);
+        end
+        
+        // TRF is now FULL (16/16). The next tasks should wait in the FIFO!
+        $display("[TC5] Injecting 5 more tasks. These should buffer in the FIFO...");
+        for (int i = 16; i <= 20; i++) begin
+            host_send_task(10'd900 + i, 10'd1, 32'h9200_0000, 10'd900);
+        end
+
+        @(posedge clk); #1;
+        if (!uut.empty_wire) $display("[TC5] SUCCESS: FIFO is correctly holding backpressure data!");
+
+        // Release the bottleneck (Task 900 finishes)
+        $display("[TC5] Releasing bottleneck (Task 900 completes)...");
+        finish_active_cores(64'h0000_0000_0000_0003); 
+        
+        // System should now rapidly allocate the dependent tasks, making room in TRF,
+        // which will pull the remaining 5 tasks from the FIFO automatically.
+        // We will let the random finisher handle draining them all.
+
+        // =====================================================================
+        // TC6: Constrained Random Chaos
+        // =====================================================================
+        $display("\n[TC6] Random Execution Chaos (Stress Testing Arbiter)...");
+        
+        fork
+            // Thread 1: Inject random noise (Tasks with varying quotas)
+            begin
+                for (int i = 0; i < 30; i++) begin
+                    // Random quota between 1 and 6, Random dependency 0 or previous
+                    host_send_task(10'd2000 + i, ($urandom() % 6) + 1, 32'hDEAD_0000, (($urandom() % 2) == 0) ? 0 : (10'd2000 + i - 1));
+                end
+            end
+            
+            // Thread 2: Randomly finish cores over 10,000 clock cycles
+            begin
+                run_random_completions(10000);
+            end
+        join
+
+        // Ensure everything is drained before exiting
+        finish_active_cores(64'hFFFF_FFFF_FFFF_FFFF); 
+        wait_for_cores(0);
 
         $display("\n=========================================================");
         $display("   TESTBENCH COMPLETED SUCCESSFULLY");
