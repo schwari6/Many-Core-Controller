@@ -3,72 +3,88 @@
 
 module tmt_tb();
 
-    reg         clk;
-    reg         rst_n;
+    // -------------------------------------------------------------------------
+    // Signals & Interfaces
+    // -------------------------------------------------------------------------
+    logic        clk;
+    logic        rst_n;
 
     // FIFO interface
-    reg  [63:0] fifo_tmt_data;
-    reg         empty;
-    wire        tmt_fifo_ack;
+    logic [63:0] fifo_tmt_data;
+    logic        empty;
+    logic        tmt_fifo_ack;
 
     // CMT interface (Allocation)
-    reg         ava_core_valid;
-    reg  [5:0]  ava_core_id;
-    wire        tmt_cmt_ack;
-    wire [3:0]  tmt_idx_tmt_cmt;
-    wire [9:0]  task_id_tmt_cmt;
-    wire [9:0]  instance_id_tmt_cmt;
+    logic        ava_core_valid;
+    logic [5:0]  ava_core_id;
+    logic        tmt_cmt_ack;
+    logic [3:0]  tmt_idx_tmt_cmt;
+    logic [9:0]  task_id_tmt_cmt;
+    logic [9:0]  instance_id_tmt_cmt;
 
     // CMT interface (Termination)
-    reg         task_done_pulse;
-    reg  [3:0]  terminated_tmt_idx;
+    logic        task_done_pulse;
+    logic [3:0]  terminated_tmt_idx;
 
     // Cores Interface
-    wire [31:0] dispatch_addr;
-    wire [5:0]  dispatch_core_id;
+    logic [31:0] dispatch_addr;
+    logic [5:0]  dispatch_core_id;
     
     // Status
-    wire [1:0]  err;
+    logic [1:0]  err;
 
+    // -------------------------------------------------------------------------
+    // UUT Instantiation
+    // -------------------------------------------------------------------------
     tmt uut (
-        .clk(clk),
-        .rst_n(rst_n),
-        .fifo_tmt_data(fifo_tmt_data),
-        .empty(empty),
-        .tmt_fifo_ack(tmt_fifo_ack),
-        .ava_core_valid(ava_core_valid),
-        .ava_core_id(ava_core_id),
-        .tmt_cmt_ack(tmt_cmt_ack),
-        .tmt_idx_tmt_cmt(tmt_idx_tmt_cmt),
-        .task_id_tmt_cmt(task_id_tmt_cmt),
-        .instance_id_tmt_cmt(instance_id_tmt_cmt),
-        .task_done_pulse(task_done_pulse),
-        .terminated_tmt_idx(terminated_tmt_idx),
-        .dispatch_addr(dispatch_addr),
-        .dispatch_core_id(dispatch_core_id),
-        .err(err)
+        .i_clk(clk),
+        .i_rst_n(rst_n),
+        .i_fifo_tmt_data(fifo_tmt_data),
+        .i_empty(empty),
+        .o_tmt_fifo_ack(tmt_fifo_ack),
+        .i_ava_core_valid(ava_core_valid),
+        .i_ava_core_id(ava_core_id),
+        .o_tmt_cmt_ack(tmt_cmt_ack),
+        .o_tmt_idx_tmt_cmt(tmt_idx_tmt_cmt),
+        .o_task_id_tmt_cmt(task_id_tmt_cmt),
+        .o_instance_id_tmt_cmt(instance_id_tmt_cmt),
+        .i_task_done_pulse(task_done_pulse),
+        .i_terminated_tmt_idx(terminated_tmt_idx),
+        .o_dispatch_addr(dispatch_addr),
+        .o_dispatch_core_id(dispatch_core_id),
+        .o_err(err)
     );
 
-    // Clock generation (300MHz -> ~3.33ns period, using 4ns for simple 250MHz simulation)
+    // -------------------------------------------------------------------------
+    // Verification Environment Variables
+    // -------------------------------------------------------------------------
+    int error_count = 0;
+    int pass_count  = 0;
+    
+    // Associative array to track where tasks were stored internally
+    // task_id -> tmt_idx
+    int task_location_map[int]; 
+
+    // -------------------------------------------------------------------------
+    // Clock Generation & Watchdog
+    // -------------------------------------------------------------------------
     initial begin
         clk = 0;
-        forever #2 clk = ~clk;
+        forever #2 clk = ~clk; // 250 MHz
     end
 
-    // Helper task to format the 64-bit word
-    task set_fifo_data;
-        input [9:0]  id;
-        input [9:0]  quota;
-        input [31:0] addr;
-        input [9:0]  dep;
-        begin
-            // [63:54] ID, [53:44] Quota, [43:12] Addr, [11:2] Dep, [1:0] Rsvd
-            fifo_tmt_data = {id, quota, addr, dep, 2'b00};
-        end
-    endtask
-
     initial begin
-        // Init
+        #50000;
+        $display("\n\033[0;31m[FATAL] Watchdog Timer Expired! Simulation Hung.\033[0m");
+        $finish;
+    end
+
+    // -------------------------------------------------------------------------
+    // BFM Tasks (Bus Functional Models)
+    // -------------------------------------------------------------------------
+    
+    // Reset System
+    task reset_system();
         rst_n = 0;
         empty = 1;
         fifo_tmt_data = 0;
@@ -76,125 +92,235 @@ module tmt_tb();
         ava_core_id = 0;
         task_done_pulse = 0;
         terminated_tmt_idx = 0;
-
-        #10;
+        @(posedge clk);
+        @(posedge clk);
         rst_n = 1;
-        #10;
+        @(posedge clk);
+    endtask
 
-        $display("--- Start of TMT Test ---");
+    // Assert Helper
+    task assert_eq(int actual, int expected, string msg);
+        if (actual !== expected) begin
+            $display("\033[0;31m[FAIL]\033[0m %s | Expected: %0h, Actual: %0h", msg, expected, actual);
+            error_count++;
+        end else begin
+            pass_count++;
+        end
+    endtask
 
-        // ---------------------------------------------------------------------
-        // 1. Ingress: Task 100 enters (No dependencies, Quota = 2)
-        // ---------------------------------------------------------------------
-        $display("Ingress: Loading Task 100...");
-        set_fifo_data(10'd100, 10'd2, 32'h0000_1000, 10'd0);
+    // Push Task to Ingress FIFO
+    task push_task(input [9:0] id, input [9:0] quota, input [31:0] addr, input [9:0] dep);
+        @(posedge clk);
+        #1;
+        fifo_tmt_data = {id, quota, addr, dep, 2'b00};
         empty = 0;
+        
+        // Wait for ACK
+        wait(tmt_fifo_ack == 1'b1);
         @(posedge clk);
         #1;
-        empty = 1; // FIFO empty again
+        empty = 1; // De-assert after taken
+        fifo_tmt_data = 64'h0;
+    endtask
 
-        // Wait a cycle for internal routing and FSM update
+    // Allocate a core and capture the assigned TMT Index
+    task allocate_core(input [5:0] core_id, output [9:0] out_task_id, output [3:0] out_tmt_idx);
         @(posedge clk);
         #1;
-        // Verify FSM State is READY (01) for row 0
-        if (uut.trf_fsm_state[0] == 2'b01) $display("PASS: Task 100 State is READY (01).");
-        else $display("FAIL: Task 100 State is %b, expected 01", uut.trf_fsm_state[0]);
-
-        // ---------------------------------------------------------------------
-        // 2. Allocation: Dispatch Instance 0
-        // ---------------------------------------------------------------------
-        $display("Allocation: Requesting core for Task 100...");
         ava_core_valid = 1;
-        ava_core_id = 6'd12; // Core 12 is free
-        @(posedge clk);
-        #1;
-        if (tmt_cmt_ack && task_id_tmt_cmt == 10'd100 && instance_id_tmt_cmt == 10'd0)
-            $display("PASS: Dispatched Task 100, Instance 0 to Core 12");
-        else
-            $display("FAIL: Dispatch incorrect. Task=%d, Inst=%d", task_id_tmt_cmt, instance_id_tmt_cmt);
-            
-        // ---------------------------------------------------------------------
-        // 3. Allocation: Dispatch Instance 1
-        // ---------------------------------------------------------------------
-        ava_core_id = 6'd13; // Core 13 is free
-        @(posedge clk);
-        #1;
-        if (tmt_cmt_ack && instance_id_tmt_cmt == 10'd1)
-            $display("PASS: Dispatched Task 100, Instance 1 to Core 13");
-        else
-            $display("FAIL: Dispatch incorrect. Inst=%d", instance_id_tmt_cmt);
-            
-        ava_core_valid = 0; // Stop asking for cores
-
-        @(posedge clk);
-        #1;
-        // Verify FSM State is ALL_ALLOCATED (10) for row 0 since dispatch_left == 0
-        if (uut.trf_fsm_state[0] == 2'b10) $display("PASS: Task 100 State is ALL_ALLOCATED (10).");
-        else $display("FAIL: Task 100 State is %b, expected 10", uut.trf_fsm_state[0]);
-
-        // ---------------------------------------------------------------------
-        // 4. Ingress: Task 200 enters (Depends on Task 100, Quota = 1)
-        // ---------------------------------------------------------------------
-        $display("Ingress: Loading Task 200 (Depends on 100)...");
-        set_fifo_data(10'd200, 10'd1, 32'h0000_2000, 10'd100);
-        empty = 0;
-        @(posedge clk);
-        #1;
-        empty = 1;
+        ava_core_id = core_id;
+        
+        // Wait for allocation ACK
+        wait(tmt_cmt_ack == 1'b1);
+        out_task_id = task_id_tmt_cmt;
+        out_tmt_idx = tmt_idx_tmt_cmt;
+        
+        // Map it for later termination
+        task_location_map[out_task_id] = out_tmt_idx;
         
         @(posedge clk);
         #1;
-        // Verify FSM State is PENDING (00) for row 1
-        if (uut.trf_fsm_state[1] == 2'b00) $display("PASS: Task 200 State is PENDING (00).");
-        else $display("FAIL: Task 200 State is %b, expected 00", uut.trf_fsm_state[1]);
+        ava_core_valid = 0;
+    endtask
 
-        // Ensure Task 200 is NOT dispatched (it should be stuck in pending)
-        ava_core_valid = 1;
-        ava_core_id = 6'd14;
+    // Terminate an instance of a task
+    task terminate_task_instance(input [3:0] tmt_idx);
         @(posedge clk);
         #1;
-        if (!tmt_cmt_ack)
-            $display("PASS: Task 200 correctly blocked by dependency.");
-        else
-            $display("FAIL: Task 200 was dispatched early!");
-            
+        task_done_pulse = 1;
+        terminated_tmt_idx = tmt_idx;
+        @(posedge clk);
+        #1;
+        task_done_pulse = 0;
+    endtask
+
+    // -------------------------------------------------------------------------
+    // Test Sequences
+    // -------------------------------------------------------------------------
+    initial begin
+        logic [9:0] allocated_task;
+        logic [3:0] allocated_idx;
+
+        $display("===============================================================");
+        $display("                 STARTING ADVANCED TMT VERIFICATION              ");
+        $display("===============================================================");
+        
+        reset_system();
+
+        // =====================================================================
+        // TEST 1: Basic Sanity & Multi-Instance Allocation
+        // =====================================================================
+        $display("\n--- [TEST 1] Sanity: Multi-Instance Task ---");
+        push_task(10'd100, 10'd2, 32'hAAAA_0000, 10'd0);
+        
+        // Allocate Instance 0
+        allocate_core(6'd10, allocated_task, allocated_idx);
+        assert_eq(allocated_task, 10'd100, "T1: Allocated Task ID should be 100");
+        assert_eq(instance_id_tmt_cmt, 10'd0, "T1: Instance ID should be 0");
+        assert_eq(dispatch_addr, 32'hAAAA_0000, "T1: Dispatch Address Mismatch");
+
+        // Allocate Instance 1
+        allocate_core(6'd11, allocated_task, allocated_idx);
+        assert_eq(instance_id_tmt_cmt, 10'd1, "T1: Instance ID should be 1");
+
+        // Verify FSM State is ALLOCATED (2'b10)
+        @(posedge clk);
+        assert_eq(uut.trf_fsm_state[allocated_idx], 2'b10, "T1: FSM State should be ALL_ALLOCATED (10)");
+
+        // Terminate both instances
+        terminate_task_instance(allocated_idx);
+        terminate_task_instance(allocated_idx);
+        
+        @(posedge clk);
+        assert_eq(uut.trf_valid[allocated_idx], 1'b0, "T1: TRF Slot should be freed after termination");
+
+        // =====================================================================
+        // TEST 2: Deep Dependency Chain (Task 300 -> 200 -> 100)
+        // =====================================================================
+        $display("\n--- [TEST 2] Deep Dependency Chain ---");
+        
+        // Push in reverse order of execution (Dependency target must be present first)
+        push_task(10'd10, 10'd1, 32'h0000_0010, 10'd0);  // Task 10, no dep
+        push_task(10'd20, 10'd1, 32'h0000_0020, 10'd10); // Task 20, depends on 10
+        push_task(10'd30, 10'd1, 32'h0000_0030, 10'd20); // Task 30, depends on 20
+
+        // Only Task 10 should be ready. Let's allocate it.
+        allocate_core(6'd1, allocated_task, allocated_idx);
+        assert_eq(allocated_task, 10'd10, "T2: Only Task 10 should be ready to allocate");
+        
+        // Try to allocate Task 20 prematurely (Should Timeout/Fail if we block, but we use a trick)
+        ava_core_valid = 1;
+        ava_core_id = 6'd2;
+        @(posedge clk); #1;
+        assert_eq(tmt_cmt_ack, 1'b0, "T2: Task 20 should NOT be acknowledged (Blocked by Dep)");
         ava_core_valid = 0;
 
-        // ---------------------------------------------------------------------
-        // 5. Termination: Both instances of Task 100 finish
-        // ---------------------------------------------------------------------
-        $display("Termination: Completing Task 100 to resolve dependency...");
+        // Terminate Task 10 -> Resolves Task 20's dependency
+        terminate_task_instance(allocated_idx);
+        
+        // Now Task 20 should be ready
+        allocate_core(6'd2, allocated_task, allocated_idx);
+        assert_eq(allocated_task, 10'd20, "T2: Task 20 should now be allocated");
+
+        // Terminate Task 20 -> Resolves Task 30's dependency
+        terminate_task_instance(allocated_idx);
+
+        // Now Task 30 should be ready
+        allocate_core(6'd3, allocated_task, allocated_idx);
+        assert_eq(allocated_task, 10'd30, "T2: Task 30 should now be allocated");
+        
+        terminate_task_instance(allocated_idx);
+
+        // =====================================================================
+        // TEST 3: Stress Test - Full TRF Capacity (16 Slots)
+        // =====================================================================
+        $display("\n--- [TEST 3] Stress Test: Full TRF Capacity ---");
+        reset_system();
+        
+        // Fill all 16 slots with independent tasks
+        for (int i = 0; i < 16; i++) begin
+            push_task(1000 + i, 10'd1, 32'hBBBB_0000 + i, 10'd0);
+        end
+        
+        // Verify TRF is full
         @(posedge clk);
-        task_done_pulse = 1;
-        terminated_tmt_idx = 4'd0; // Assuming Task 100 was placed in row 0
-        @(posedge clk);
-        // Second instance finishes
-        @(posedge clk);
-        task_done_pulse = 0;
+        assert_eq(uut.trf_valid, 16'hFFFF, "T3: TRF should be completely full (FFFF)");
+        
+        // Attempting to push 17th task should NOT generate ACK immediately
+        fifo_tmt_data = {10'd999, 10'd1, 32'h0, 10'd0, 2'b00};
+        empty = 0;
+        @(posedge clk); #1;
+        assert_eq(tmt_fifo_ack, 1'b0, "T3: FIFO should backpressure when TRF is full");
+        empty = 1; // Cancel request
+        
+        // Drain all 16 slots
+        for (int i = 0; i < 16; i++) begin
+            allocate_core(6'd20 + i, allocated_task, allocated_idx);
+            terminate_task_instance(allocated_idx);
+        end
         
         @(posedge clk);
-        #1;
-        // Task 100 row should be freed (valid=0), so state returns to PENDING (00) by default logic
-        if (uut.trf_valid[0] == 1'b0) $display("PASS: Task 100 row correctly freed.");
-        else $display("FAIL: Task 100 row still active.");
+        assert_eq(uut.trf_valid, 16'h0000, "T3: TRF should be completely empty after drain");
 
-        // Verify FSM State is READY (01) for row 1 (Task 200) since dependency cleared
-        if (uut.trf_fsm_state[1] == 2'b01) $display("PASS: Task 200 State is now READY (01).");
-        else $display("FAIL: Task 200 State is %b, expected 01", uut.trf_fsm_state[1]);
-
-        // ---------------------------------------------------------------------
-        // 6. Allocation: Task 200 should now be unblocked
-        // ---------------------------------------------------------------------
-        ava_core_valid = 1;
-        ava_core_id = 6'd14;
+        // =====================================================================
+        // TEST 4: FDIR Deadlock Detection (Err = 01)
+        // =====================================================================
+        // To trigger the deadlock in this RTL:
+        // 1. TRF must be FULL (valid = FFFF)
+        // 2. NO task can be in READY state (!ready_valid_comb)
+        // We achieve this by:
+        // Task 0: Has no dependency, Quota = 10.
+        // Task 1-15: Depend on Task 0.
+        // Then we allocate ALL 10 instances of Task 0. 
+        // Task 0 state goes to ALLOCATED (not READY). 
+        // Tasks 1-15 are PENDING (waiting for Task 0 to terminate).
+        // Boom -> TRF Full + No Ready Slots = Deadlock Err.
+        $display("\n--- [TEST 4] FDIR Deadlock Detection ---");
+        reset_system();
+        
+        // 1. Push blocking task
+        push_task(10'd1, 10'd10, 32'hDEAD_0001, 10'd0); // Slot 0
+        
+        // 2. Push 15 dependent tasks
+        for (int i = 1; i < 16; i++) begin
+            push_task(10'd2 + i, 10'd1, 32'hDEAD_0000 + i, 10'd1); // Depend on ID 1
+        end
+        
         @(posedge clk);
-        #1;
-        if (tmt_cmt_ack && task_id_tmt_cmt == 10'd200)
-            $display("PASS: Task 200 dependency resolved and dispatched.");
-        else
-            $display("FAIL: Task 200 not dispatched after dependency resolution.");
+        assert_eq(uut.trf_valid, 16'hFFFF, "T4: TRF should be full");
+        assert_eq(err, 2'b00, "T4: Err should be 00 before exhaustion");
 
-        $display("--- End of TMT Test ---");
+        // 3. Exhaust Task 1's quota (Allocate 10 times)
+        for (int i = 0; i < 10; i++) begin
+            allocate_core(6'd40 + i, allocated_task, allocated_idx);
+        end
+        
+        // 4. Check Deadlock Status
+        @(posedge clk); #1;
+        assert_eq(err, 2'b01, "T4: DEADLOCK SHOULD BE DETECTED! (Err=01)");
+
+        // 5. Relieve Deadlock by terminating Task 1
+        $display("T4: Relieving deadlock by terminating Task 1 instances...");
+        for (int i = 0; i < 10; i++) begin
+            terminate_task_instance(task_location_map[10'd1]); // Using the associative array map
+        end
+
+        @(posedge clk); #1;
+        assert_eq(err, 2'b00, "T4: Deadlock should be cleared after blocker terminates");
+
+        // =====================================================================
+        // END OF VERIFICATION
+        // =====================================================================
+        $display("\n===============================================================");
+        if (error_count == 0) begin
+            $display("\033[0;32m   VERIFICATION PASSED! \033[0m");
+            $display("   All %0d assertions passed with flying colors.", pass_count);
+        end else begin
+            $display("\033[0;31m   VERIFICATION FAILED \033[0m");
+            $display("   Found %0d errors during testing.", error_count);
+        end
+        $display("===============================================================\n");
         $finish;
     end
+
 endmodule
