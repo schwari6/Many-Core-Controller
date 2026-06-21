@@ -1,136 +1,203 @@
 `timescale 1ns / 1ps
-`include "../src/modules/cmt.v"
+//`include "../src/modules/tmt.v"
 
-module cmt_tb();
+module tmt_tb();
 
-    // Inputs
     reg         clk;
     reg         rst_n;
-    reg  [9:0]  task_id_tmt_cmt;
-    reg  [3:0]  tmt_idx_tmt_cmt;
-    reg  [9:0]  instance_num_tmt_cmt;
-    reg         tmt_cmt_ack;
-    reg  [63:0] core_done_vec;
 
-    // Outputs
-    wire        ava_core_valid;
-    wire [5:0]  ava_core_id;
-    wire        task_done_pulse;
-    wire [3:0]  terminated_tmt_idx;
-    wire [5:0]  core_id_cmt_core;
-    wire        done_ack;
+    // FIFO interface
+    reg  [63:0] fifo_tmt_data;
+    reg         empty;
+    wire        tmt_fifo_ack;
+
+    // CMT interface (Allocation)
+    reg         ava_core_valid;
+    reg  [5:0]  ava_core_id;
+    wire        tmt_cmt_ack;
+    wire [3:0]  tmt_idx_tmt_cmt;
+    wire [9:0]  task_id_tmt_cmt;
+    wire [9:0]  instance_id_tmt_cmt;
+
+    // CMT interface (Termination)
+    reg         task_done_pulse;
+    reg  [3:0]  terminated_tmt_idx;
+
+    // Cores Interface
+    wire [31:0] dispatch_addr;
+    wire [5:0]  dispatch_core_id;
+    
+    // Status
     wire [1:0]  err;
 
-    // Instantiate the Unit Under Test (UUT)
-    cmt uut (
+    tmt uut (
         .clk(clk),
         .rst_n(rst_n),
+        .fifo_tmt_data(fifo_tmt_data),
+        .empty(empty),
+        .tmt_fifo_ack(tmt_fifo_ack),
         .ava_core_valid(ava_core_valid),
         .ava_core_id(ava_core_id),
-        .task_id_tmt_cmt(task_id_tmt_cmt),
-        .tmt_idx_tmt_cmt(tmt_idx_tmt_cmt),
-        .instance_num_tmt_cmt(instance_num_tmt_cmt),
         .tmt_cmt_ack(tmt_cmt_ack),
+        .tmt_idx_tmt_cmt(tmt_idx_tmt_cmt),
+        .task_id_tmt_cmt(task_id_tmt_cmt),
+        .instance_id_tmt_cmt(instance_id_tmt_cmt),
         .task_done_pulse(task_done_pulse),
         .terminated_tmt_idx(terminated_tmt_idx),
-        .core_done_vec(core_done_vec),
-        .core_id_cmt_core(core_id_cmt_core),
-        .done_ack(done_ack),
+        .dispatch_addr(dispatch_addr),
+        .dispatch_core_id(dispatch_core_id),
         .err(err)
     );
 
     // Clock generation (300MHz -> ~3.33ns period, using 4ns for simple 250MHz simulation)
     initial begin
         clk = 0;
-        forever #2 clk = ~clk; 
+        forever #2 clk = ~clk;
     end
 
-    initial begin
-        // Initialize Inputs
-        rst_n = 0;
-        task_id_tmt_cmt = 10'd0;
-        tmt_idx_tmt_cmt = 4'd0;
-        tmt_cmt_ack = 0;
-        core_done_vec = 64'd0;
+    // Helper task to format the 64-bit word
+    task set_fifo_data;
+        input [9:0]  id;
+        input [9:0]  quota;
+        input [31:0] addr;
+        input [9:0]  dep;
+        begin
+            // [63:54] ID, [53:44] Quota, [43:12] Addr, [11:2] Dep, [1:0] Rsvd
+            fifo_tmt_data = {id, quota, addr, dep, 2'b00};
+        end
+    endtask
 
-        // Reset the system
+    initial begin
+    // אתחול קבצי ה-VCD לצפייה בגלים (GTKWave) - המקור שלך נשמר!
+    $dumpfile("tmt_sim.vcd");
+    $dumpvars(0, tmt_tb);
+        // Init
+        rst_n = 0;
+        empty = 1;
+        fifo_tmt_data = 0;
+        ava_core_valid = 0;
+        ava_core_id = 0;
+        task_done_pulse = 0;
+        terminated_tmt_idx = 0;
+
         #10;
         rst_n = 1;
         #10;
 
-        $display("--- Start of CMT Test ---");
+        $display("--- Start of TMT Test ---");
 
         // ---------------------------------------------------------------------
-        // 1. Test Allocation (Idle core detection)
+        // 1. Ingress: Task 100 enters (No dependencies, Quota = 2)
         // ---------------------------------------------------------------------
-        $display("Testing Allocation...");
-        // UUT should indicate core 0 is available immediately after reset
-        if (ava_core_valid && ava_core_id == 6'd0) $display("PASS: Found idle core 0.");
-        else $display("FAIL: Did not find idle core 0.");
-
-        // Allocate TMT row index 5 to core 0
-        @(posedge clk);
-        task_id_tmt_cmt = 10'd57;
-        tmt_idx_tmt_cmt = 4'd5;
-        tmt_cmt_ack = 1;
-        @(posedge clk);
-        tmt_cmt_ack = 0; // Drop ack
-        
-        #1;
-        // Now core 0 is busy, core 1 should be the next available
-        if (ava_core_valid && ava_core_id == 6'd1) $display("PASS: Core 0 is busy, found next idle core 1.");
-        else $display("FAIL: Core 1 not found. Found %d instead.", ava_core_id);
-
-        // Allocate TMT row index 9 to core 1
-        @(posedge clk);
-        task_id_tmt_cmt = 10'd58;
-        tmt_idx_tmt_cmt = 4'd9;
-        tmt_cmt_ack = 1;
-        @(posedge clk);
-        tmt_cmt_ack = 0;
-
-        // ---------------------------------------------------------------------
-        // 2. Test Termination & Arbitration (Multiple cores finish together)
-        // ---------------------------------------------------------------------
-        $display("Testing Termination and Arbitration...");
-        
-        // Cores 0 and 1 finish simultaneously
-        @(posedge clk);
-        core_done_vec[0] = 1'b1;
-        core_done_vec[1] = 1'b1;
-
-        // Cycle 1: CMT should process core 0 first (due to Priority Encoder)
+        $display("Ingress: Loading Task 100...");
+        set_fifo_data(10'd100, 10'd2, 32'h0000_1000, 10'd0);
+        empty = 0;
         @(posedge clk);
         #1;
-        if (task_done_pulse && terminated_tmt_idx == 4'd5 && done_ack && core_id_cmt_core == 6'd0) begin
-            $display("PASS: Core 0 termination processed correctly.");
-            core_done_vec[0] = 1'b0; // Core 0 drops its line after receiving done_ack
-        end else $display("FAIL: Core 0 not processed correctly.");
+        empty = 1; // FIFO empty again
 
-        // Cycle 2: CMT should process core 1 in the very next cycle
+        // Wait a cycle for internal routing and FSM update
         @(posedge clk);
         #1;
-        if (task_done_pulse && terminated_tmt_idx == 4'd9 && done_ack && core_id_cmt_core == 6'd1) begin
-            $display("PASS: Core 1 termination processed correctly (Arbitration successful).");
-            core_done_vec[1] = 1'b0; // Core 1 drops its line
-        end else $display("FAIL: Core 1 not processed correctly.");
+        // Verify FSM State is READY (01) for row 0
+        if (uut.trf_fsm_state[0] == 2'b01) $display("PASS: Task 100 State is READY (01).");
+        else $display("FAIL: Task 100 State is %b, expected 01", uut.trf_fsm_state[0]);
 
         // ---------------------------------------------------------------------
-        // 3. Test Invalid Termination Error (FDIR)
+        // 2. Allocation: Dispatch Instance 0
         // ---------------------------------------------------------------------
-        $display("Testing Invalid Termination Error...");
+        $display("Allocation: Requesting core for Task 100...");
+        ava_core_valid = 1;
+        ava_core_id = 6'd12; // Core 12 is free
         @(posedge clk);
-        core_done_vec[5] = 1'b1; // Core 5 raises Done, but was never allocated!
+        #1;
+        if (tmt_cmt_ack && task_id_tmt_cmt == 10'd100 && instance_id_tmt_cmt == 10'd0)
+            $display("PASS: Dispatched Task 100, Instance 0 to Core 12");
+        else
+            $display("FAIL: Dispatch incorrect. Task=%d, Inst=%d", task_id_tmt_cmt, instance_id_tmt_cmt);
+            
+        // ---------------------------------------------------------------------
+        // 3. Allocation: Dispatch Instance 1
+        // ---------------------------------------------------------------------
+        ava_core_id = 6'd13; // Core 13 is free
+        @(posedge clk);
+        #1;
+        if (tmt_cmt_ack && instance_id_tmt_cmt == 10'd1)
+            $display("PASS: Dispatched Task 100, Instance 1 to Core 13");
+        else
+            $display("FAIL: Dispatch incorrect. Inst=%d", instance_id_tmt_cmt);
+            
+        ava_core_valid = 0; // Stop asking for cores
+
+        @(posedge clk);
+        #1;
+        // Verify FSM State is ALL_ALLOCATED (10) for row 0 since dispatch_left == 0
+        if (uut.trf_fsm_state[0] == 2'b10) $display("PASS: Task 100 State is ALL_ALLOCATED (10).");
+        else $display("FAIL: Task 100 State is %b, expected 10", uut.trf_fsm_state[0]);
+
+        // ---------------------------------------------------------------------
+        // 4. Ingress: Task 200 enters (Depends on Task 100, Quota = 1)
+        // ---------------------------------------------------------------------
+        $display("Ingress: Loading Task 200 (Depends on 100)...");
+        set_fifo_data(10'd200, 10'd1, 32'h0000_2000, 10'd100);
+        empty = 0;
+        @(posedge clk);
+        #1;
+        empty = 1;
         
         @(posedge clk);
         #1;
-        if (err == 2'b10) $display("PASS: Caught invalid termination on core 5.");
-        else $display("FAIL: Did not catch invalid termination. Err = %b", err);
-        
-        core_done_vec[5] = 1'b0;
+        // Verify FSM State is PENDING (00) for row 1
+        if (uut.trf_fsm_state[1] == 2'b00) $display("PASS: Task 200 State is PENDING (00).");
+        else $display("FAIL: Task 200 State is %b, expected 00", uut.trf_fsm_state[1]);
 
-        $display("--- End of CMT Test ---");
+        // Ensure Task 200 is NOT dispatched (it should be stuck in pending)
+        ava_core_valid = 1;
+        ava_core_id = 6'd14;
+        @(posedge clk);
+        #1;
+        if (!tmt_cmt_ack)
+            $display("PASS: Task 200 correctly blocked by dependency.");
+        else
+            $display("FAIL: Task 200 was dispatched early!");
+            
+        ava_core_valid = 0;
+
+        // ---------------------------------------------------------------------
+        // 5. Termination: Both instances of Task 100 finish
+        // ---------------------------------------------------------------------
+        $display("Termination: Completing Task 100 to resolve dependency...");
+        @(posedge clk);
+        task_done_pulse = 1;
+        terminated_tmt_idx = 4'd0; // Assuming Task 100 was placed in row 0
+        @(posedge clk);
+        // Second instance finishes
+        @(posedge clk);
+        task_done_pulse = 0;
+        
+        @(posedge clk);
+        #1;
+        // Task 100 row should be freed (valid=0), so state returns to PENDING (00) by default logic
+        if (uut.trf_valid[0] == 1'b0) $display("PASS: Task 100 row correctly freed.");
+        else $display("FAIL: Task 100 row still active.");
+
+        // Verify FSM State is READY (01) for row 1 (Task 200) since dependency cleared
+        if (uut.trf_fsm_state[1] == 2'b01) $display("PASS: Task 200 State is now READY (01).");
+        else $display("FAIL: Task 200 State is %b, expected 01", uut.trf_fsm_state[1]);
+
+        // ---------------------------------------------------------------------
+        // 6. Allocation: Task 200 should now be unblocked
+        // ---------------------------------------------------------------------
+        ava_core_valid = 1;
+        ava_core_id = 6'd14;
+        @(posedge clk);
+        #1;
+        if (tmt_cmt_ack && task_id_tmt_cmt == 10'd200)
+            $display("PASS: Task 200 dependency resolved and dispatched.");
+        else
+            $display("FAIL: Task 200 not dispatched after dependency resolution.");
+
+        $display("--- End of TMT Test ---");
         $finish;
     end
-
 endmodule
