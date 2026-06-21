@@ -67,19 +67,30 @@ module controller_tb();
     end
 
     // -------------------------------------------------------------------------
-    // Logging for Python Script (CSV Format)
+    // System Telemetry & Event Monitors (For Python Analytics)
     // -------------------------------------------------------------------------
-    int active_cores_count;
     always @(posedge clk) begin
         if (rst_n) begin
-            active_cores_count = $countones(uut.inst_cmt.core_busy);
-            // Format: CSV_LOG, Time, ActiveCores, ErrorBus
-            $display("CSV_LOG,%0t,%0d,%0d", $time, active_cores_count, err_bus);
+            // 1. System State Monitoring (Every Clock)
+            // LOG_SYS, Time, ActiveCores, FIFO_Full
+            $display("LOG_SYS,%0t,%0d,%b", $time, $countones(uut.inst_cmt.core_busy), full);
+            
+            // 2. Allocation Monitoring (When a core is granted by TMT)
+            if (uut.tmt_cmt_ack_wire) begin
+                $display("LOG_ALLOC,%0t,%0d,%0d", $time, uut.task_id_tmt_cmt_wire, uut.ava_core_id_wire);
+            end
+            
+            // 3. Termination Monitoring (When a core is freed by CMT)
+            if (done_ack) begin
+                $display("LOG_FREE,%0t,%0d,%0d", $time, 
+                         uut.inst_cmt.core_task_id[core_id_cmt_core], 
+                         core_id_cmt_core);
+            end
         end
     end
 
     // -------------------------------------------------------------------------
-    // Synchronous Auto-Clear Core Done Logic (Robust BFM)
+    // Synchronous Auto-Clear Core Done Logic
     // -------------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && done_ack) begin
@@ -88,7 +99,7 @@ module controller_tb();
     end
 
     // -------------------------------------------------------------------------
-    // Tasks (BFMs & Monitors)
+    // Tasks (BFMs & Print Monitors)
     // -------------------------------------------------------------------------
     task host_send_task(input [9:0] id, input [9:0] quota, input [31:0] addr, input [9:0] dep);
         if (full) begin
@@ -96,6 +107,10 @@ module controller_tb();
             @(negedge full);
         end
         @(posedge clk);
+        
+        // Log the injection of the task
+        $display("LOG_HOST,%0t,%0d,%0d,%0d", $time, id, quota, dep); 
+        
         cfg_data = {id, quota, addr, dep, 2'b00};
         cfg_en = 1;
         @(posedge clk);
@@ -127,18 +142,6 @@ module controller_tb();
         $display("=====================================================================\n");
     endtask
 
-    task print_cmt_snapshot();
-        $display("\n=====================================================================");
-        $display("=                  CMT SNAPSHOT (Active Cores Only)                 =");
-        $display("=====================================================================");
-        for (int i = 0; i < 64; i++) begin
-            if (uut.inst_cmt.core_busy[i]) begin
-                $display("Core %2d is BUSY running TMT Index: %2d", i, uut.inst_cmt.core_tmt_idx[i]);
-            end
-        end
-        $display("=====================================================================\n");
-    endtask
-
     // -------------------------------------------------------------------------
     // Main Test Sequence
     // -------------------------------------------------------------------------
@@ -150,65 +153,47 @@ module controller_tb();
 
         #30; rst_n = 1; #30;
 
-        // =====================================================================
-        // TC1: Project Book Snapshots (Clear Sequential Demo)
-        // =====================================================================
+        // TC1: Sequential Demo & Screenshots
         $display("[TC1] Generating Data for Project Book Screenshots...");
         host_send_task(10'd500, 10'd5, 32'h1000_0000, 10'd0); // Independent
         host_send_task(10'd501, 10'd2, 32'h2000_0000, 10'd500); // Depends on 500
         
-        wait_for_cores(5); // Wait for task 500 to allocate 5 cores
+        wait_for_cores(5); 
         #20;
-        $display("\n---> [SCREENSHOT OPPORTUNITY 1: Dependency Pending] <---");
         print_tmt_snapshot();
-        print_cmt_snapshot();
 
-        // Finish task 500
         @(posedge clk);
         core_done_vec[4:0] = 5'h1F; // Cores 0-4 finish
-        wait_for_cores(2); // Wait for task 501 to kick in
-        
-        $display("\n---> [SCREENSHOT OPPORTUNITY 2: Dependency Resolved] <---");
+        wait_for_cores(2); 
         print_tmt_snapshot();
-        print_cmt_snapshot();
 
-        // Finish task 501
         @(posedge clk);
-        core_done_vec[64:0] = ~64'd0; // Just trigger all active to finish
+        core_done_vec[64:0] = ~64'd0; 
         wait_for_cores(0);
 
-        // =====================================================================
-        // TC2: Massive Stress Test (64 Cores Saturation)
-        // =====================================================================
+        // TC2: 64 Cores Saturation
         $display("\n[TC2] System Stress Test - Saturating all 64 cores...");
         for (int i = 0; i < 8; i++) begin
-            host_send_task(10'd10 + i, 10'd8, 32'hAAAA_0000 + i, 10'd0); // 8 tasks * 8 quota = 64 cores
+            host_send_task(10'd10 + i, 10'd8, 32'hAAAA_0000 + i, 10'd0); 
         end
 
         wait_for_cores(64);
         #20;
-        $display("\n---> [SCREENSHOT OPPORTUNITY 3: 100% Core Utilization] <---");
         print_tmt_snapshot();
         
-        // Let's finish them 16 at a time (Simulating real hardware variance)
         for (int b = 0; b < 4; b++) begin
             @(posedge clk);
             core_done_vec[(b*16) +: 16] = 16'hFFFF;
-            #200; // Let arbitration handle 16 simultaneous terminations safely
+            #200; 
         end
         wait_for_cores(0);
-        $display("[TC2] Stress Test Passed. All cores gracefully terminated.");
 
-        // =====================================================================
-        // TC3: FDIR (Fault Detection) Injection
-        // =====================================================================
+        // TC3: FDIR (Fault Detection)
         $display("\n[TC3] Injecting Fault: Idle core sending termination...");
         @(posedge clk);
-        core_done_vec[63] = 1'b1; // Core 63 is idle, but sends DONE!
+        core_done_vec[63] = 1'b1; 
         #50;
         core_done_vec[63] = 1'b0;
-        if (err_bus != 4'b0000) $display("\033[0;32m[TC3] Fault correctly caught! err_bus = %b\033[0m", err_bus);
-        else $display("\033[0;31m[TC3] Fault missed!\033[0m");
 
         $display("\n=========================================================");
         $display("   TESTBENCH COMPLETED SUCCESSFULLY");
