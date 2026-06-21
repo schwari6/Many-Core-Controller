@@ -8,7 +8,7 @@ Hardware design and verification of a high-performance Many-Core Controller for 
 │   ├── modules/         # Main Many-Core Controller modules
 ├── controller.v         # Top-level RTL of the controller
 ├── tb/                  # Verification Environment (Testbenches)
-│   └── scripts/         # Automation scripts (Python/Tcl)
+├── scripts/             # Automation scripts
 ├── docs/                # Architecture Specifications & Block Diagrams
 ├── articles/	        	 # The base articles of the project
 └── README.md            # Project description and setup guide
