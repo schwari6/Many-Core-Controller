@@ -130,11 +130,6 @@ module cmt (
 
                 // Free the core
                 core_busy[term_core_id_comb] <= 1'b0;
-                
-                // Clear tracking registers for completed core to keep snapshots clean
-                core_tmt_idx[term_core_id_comb]         <= 4'd0;
-                core_task_id[term_core_id_comb]         <= 10'd0;
-                core_instance_number[term_core_id_comb] <= 10'd0;
 
                 // o_error Injection / Detection: Core terminated but wasn't busy
                 if (!core_busy[term_core_id_comb]) begin
