@@ -4,316 +4,267 @@
 module cmt_tb();
 
     // -------------------------------------------------------------------------
-    // 1. Clock & Reset Signals
+    // Signals & Interfaces
     // -------------------------------------------------------------------------
-    reg clk;
-    reg rst_n;
+    logic        clk;
+    logic        rst_n;
+
+    // Allocation Interface
+    logic        ava_core_valid;
+    logic [5:0]  ava_core_id;
+    logic [9:0]  task_id_tmt_cmt;
+    logic [3:0]  tmt_idx_tmt_cmt;
+    logic [9:0]  instance_num_tmt_cmt;
+    logic        tmt_cmt_ack;
+
+    // Termination Interface
+    logic        task_done_pulse;
+    logic [3:0]  terminated_tmt_idx;
+
+    // Cores Interface
+    logic [63:0] core_done_vec;
+    logic [5:0]  core_id_cmt_core;
+    logic        done_ack;
+
+    // Status
+    logic [1:0]  err;
 
     // -------------------------------------------------------------------------
-    // 2. Allocation Interface Signals (Interface with TMT)
-    // -------------------------------------------------------------------------
-    wire        ava_core_valid;
-    wire [5:0]  ava_core_id;
-    reg  [9:0]  task_id_tmt_cmt;
-    reg  [3:0]  tmt_idx_tmt_cmt;
-    reg  [9:0]  instance_num_tmt_cmt;
-    reg         tmt_cmt_ack;
-
-    // -------------------------------------------------------------------------
-    // 3. Termination Interface Signals (Interface with TMT)
-    // -------------------------------------------------------------------------
-    wire        task_done_pulse;
-    wire [3:0]  terminated_tmt_idx;
-
-    // -------------------------------------------------------------------------
-    // 4. Cores Interface Signals (Interface with CORES)
-    // -------------------------------------------------------------------------
-    reg  [63:0] core_done_vec;
-    wire [5:0]  core_id_cmt_core;
-    wire        done_ack;
-
-    // -------------------------------------------------------------------------
-    // 5. Status & Error Signals (Status / FDIR)
-    // -------------------------------------------------------------------------
-    wire [1:0]  err;
-
-    // -------------------------------------------------------------------------
-    // 6. Unit Under Test (UUT) Instantiation
+    // UUT Instantiation
     // -------------------------------------------------------------------------
     cmt uut (
         .i_clk(clk),
         .i_rst_n(rst_n),
-        
-        // Allocation Interface
         .o_ava_core_valid(ava_core_valid),
         .o_ava_core_id(ava_core_id),
         .i_task_id_tmt_cmt(task_id_tmt_cmt),
         .i_tmt_idx_tmt_cmt(tmt_idx_tmt_cmt),
         .i_instance_num_tmt_cmt(instance_num_tmt_cmt),
         .i_tmt_cmt_ack(tmt_cmt_ack),
-        
-        // Termination Interface
         .o_task_done_pulse(task_done_pulse),
         .o_terminated_tmt_idx(terminated_tmt_idx),
-        
-        // Cores Interface
         .i_core_done_vec(core_done_vec),
         .o_core_id_cmt_core(core_id_cmt_core),
         .o_done_ack(done_ack),
-        
-        // FDIR
         .o_err(err)
     );
 
     // -------------------------------------------------------------------------
-    // 7. Clock Generator (100MHz / 10ns period)
+    // Verification Variables (Scoreboard & Trackers)
     // -------------------------------------------------------------------------
-    always begin
-        #5 clk = ~clk;
+    int error_count = 0;
+    int pass_count  = 0;
+    
+    // Associative array to track what TMT index is assigned to which core
+    int expected_tmt_idx_per_core[int];
+
+    // -------------------------------------------------------------------------
+    // Clock Generation & Watchdog
+    // -------------------------------------------------------------------------
+    initial begin
+        clk = 0;
+        forever #5 clk = ~clk; // 100 MHz
+    end
+
+    initial begin
+        #100000;
+        $display("\n\033[0;31m[FATAL] Watchdog Timer Expired! Simulation Hung.\033[0m");
+        $finish;
     end
 
     // -------------------------------------------------------------------------
-    // 8. Stimulus / Test Cases
+    // BFM Tasks (Bus Functional Models)
     // -------------------------------------------------------------------------
-    integer i; // Loop variable for allocation testing
-
-    initial begin
-        // Initialize VCD files for waveform viewing (GTKWave)
-        $dumpfile("cmt_sim.vcd");
-        $dumpvars(0, cmt_tb);
-
-        // Initial State
-        clk = 0;
+    
+    task reset_system();
         rst_n = 0;
-        task_id_tmt_cmt = 10'd0;
-        tmt_idx_tmt_cmt = 4'd0;
-        instance_num_tmt_cmt = 10'd0;
+        task_id_tmt_cmt = 0;
+        tmt_idx_tmt_cmt = 0;
+        instance_num_tmt_cmt = 0;
         tmt_cmt_ack = 0;
-        core_done_vec = 64'd0;
-
-        // --- TC0: Power-On Reset ---
-        #20;
-        rst_n = 1; // Release reset
-        #10;
-
-        // =====================================================================
-        // TC1: Regular allocation of a task to the first available core
-        // =====================================================================
-        $display("[TC1] Starting Regular Allocation...");
+        core_done_vec = 0;
         @(posedge clk);
-        if (ava_core_valid) begin
-            $display("[TC1] Found available core ID: %d", ava_core_id);
-            task_id_tmt_cmt = 10'h0A5;       
-            tmt_idx_tmt_cmt = 4'd2;          
-            instance_num_tmt_cmt = 10'd1;    
-            tmt_cmt_ack = 1;                 
+        @(posedge clk);
+        rst_n = 1;
+        @(posedge clk);
+    endtask
+
+    task assert_eq(int actual, int expected, string msg);
+        if (actual !== expected) begin
+            $display("\033[0;31m[FAIL]\033[0m %s | Expected: %0h, Actual: %0h", msg, expected, actual);
+            error_count++;
+        end else begin
+            pass_count++;
         end
-        
-        @(posedge clk);
-        tmt_cmt_ack = 0; 
-        #20;
+    endtask
 
-        // =====================================================================
-        // TC2: Allocating multiple consecutive tasks to check core occupancy
-        // =====================================================================
-        $display("[TC2] Starting Multiple Consecutive Allocations...");
-        repeat (3) begin
-            @(posedge clk);
-            if (ava_core_valid) begin
-                $display("[TC2] Allocating next core ID: %d", ava_core_id);
-                task_id_tmt_cmt = task_id_tmt_cmt + 1;
-                tmt_idx_tmt_cmt = 4'd3; 
-                instance_num_tmt_cmt = 10'd2;
-                tmt_cmt_ack = 1;
-            end
-            @(posedge clk);
-            tmt_cmt_ack = 0;
-            #10;
-        end
-
-        // =====================================================================
-        // TC3: Single core completion and TMT update
-        // =====================================================================
-        $display("[TC3] Testing Core Termination Handshake...");
+    // Allocate a task to the next available core
+    task allocate_task(input [9:0] t_id, input [3:0] t_idx, input [9:0] inst_num, output [5:0] allocated_core);
         @(posedge clk);
-        core_done_vec[0] = 1'b1; 
-        
-        @(posedge clk);
-        #1; 
-        if (task_done_pulse) begin
-            $display("[TC3] Success: CMT sent task_done_pulse to TMT for row idx: %d", terminated_tmt_idx);
-        end
-        
-        @(posedge clk);
-        core_done_vec[0] = 1'b0; 
-        #30;
-
-        // =====================================================================
-        // TC4: Conflict and arbitration - two cores finish at the same clock cycle
-        // =====================================================================
-        $display("[TC4] Testing Simultaneous Core Terminations (Arbitration)...");
-        @(posedge clk);
-        core_done_vec[1] = 1'b1; 
-        core_done_vec[2] = 1'b1; 
-        
-        @(posedge clk);
-        #1;
-        $display("[TC4] First handled termination for TMT row idx: %d", terminated_tmt_idx);
-        if (done_ack) begin
-             if (core_id_cmt_core == 6'd1) core_done_vec[1] = 1'b0;
-             else if (core_id_cmt_core == 6'd2) core_done_vec[2] = 1'b0;
-        end
-
-        @(posedge clk);
-        #1;
-        $display("[TC4] Second handled termination for TMT row idx: %d", terminated_tmt_idx);
-        core_done_vec[1] = 1'b0;
-        core_done_vec[2] = 1'b0;
-        #30;
-
-        // =====================================================================
-        // TC5: Full Core Saturation (64 Cores Busy)
-        // Description: Perform consecutive allocations until all cores are full.
-        // Verify that ava_core_valid drops to '0' and no more tasks can be allocated.
-        // =====================================================================
-        $display("[TC5] Filling up all remaining cores to reach Saturation...");
-        for (i = 0; i < 64; i = i + 1) begin
-            @(posedge clk);
-            if (ava_core_valid) begin
-                task_id_tmt_cmt = i + 10;
-                tmt_idx_tmt_cmt = i % 16; // Reasonable distribution across TMT rows
-                instance_num_tmt_cmt = 10'd1;
-                tmt_cmt_ack = 1;
-            end else begin
-                // If no cores are available, the loop skips or stops allocation
-                tmt_cmt_ack = 0;
-            end
-        end
-        
-        @(posedge clk);
-        tmt_cmt_ack = 0;
-        #20;
-        
-        // Check if the component protects itself and correctly signals that no cores are free
+        #1; // Sample post-clock edge
         if (!ava_core_valid) begin
-            $display("[TC5] Success: All cores are BUSY. ava_core_valid is correctly low ('0').");
+            $display("\033[0;31m[FAIL]\033[0m Attempted to allocate but no core is valid!");
+            error_count++;
+            return;
+        end
+        
+        allocated_core = ava_core_id;
+        expected_tmt_idx_per_core[allocated_core] = t_idx; // Track for scoreboard
+        
+        task_id_tmt_cmt = t_id;
+        tmt_idx_tmt_cmt = t_idx;
+        instance_num_tmt_cmt = inst_num;
+        tmt_cmt_ack = 1;
+        
+        @(posedge clk);
+        #1;
+        tmt_cmt_ack = 0; // Drop ACK
+    endtask
+
+    // Simulate a core finishing its job and waiting for ACK
+    task core_terminate(input [5:0] core_id);
+        @(posedge clk);
+        #1;
+        core_done_vec[core_id] = 1'b1;
+        
+        // Wait for CMT to acknowledge this specific core
+        wait(done_ack == 1'b1 && core_id_cmt_core == core_id);
+        
+        // Verify CMT forwarded the correct TMT index upstream
+        assert_eq(task_done_pulse, 1'b1, $sformatf("Core %0d: task_done_pulse must be 1", core_id));
+        assert_eq(terminated_tmt_idx, expected_tmt_idx_per_core[core_id], $sformatf("Core %0d: Incorrect TMT idx reported", core_id));
+
+        @(posedge clk);
+        #1;
+        core_done_vec[core_id] = 1'b0; // Core clears its done signal after ACK
+    endtask
+
+    // -------------------------------------------------------------------------
+    // Main Test Sequence
+    // -------------------------------------------------------------------------
+    initial begin
+        logic [5:0] core_a, core_b, core_c;
+
+        $display("===============================================================");
+        $display("                 STARTING CMT VERIFICATION                     ");
+        $display("===============================================================");
+        
+        reset_system();
+
+        // =====================================================================
+        // TEST 1: Sanity Allocation & Termination
+        // =====================================================================
+        $display("\n--- [TEST 1] Sanity: Single Allocation & Termination ---");
+        allocate_task(10'h0A5, 4'd2, 10'd1, core_a);
+        assert_eq(core_a, 6'd0, "T1: First allocation should go to Core 0");
+        
+        core_terminate(core_a);
+        
+        @(posedge clk);
+        assert_eq(uut.core_busy[core_a], 1'b0, "T1: Core 0 should not be busy after termination");
+
+        // =====================================================================
+        // TEST 2: Multi-Instance Allocation (Sequential)
+        // =====================================================================
+        $display("\n--- [TEST 2] Multi-Instance Allocation ---");
+        allocate_task(10'h100, 4'd5, 10'd0, core_a);
+        allocate_task(10'h100, 4'd5, 10'd1, core_b);
+        allocate_task(10'h100, 4'd5, 10'd2, core_c);
+        
+        assert_eq(core_a, 6'd0, "T2: Core A should be 0");
+        assert_eq(core_b, 6'd1, "T2: Core B should be 1");
+        assert_eq(core_c, 6'd2, "T2: Core C should be 2");
+
+        // Terminate them out of order
+        core_terminate(core_c);
+        core_terminate(core_a);
+        core_terminate(core_b);
+
+        // =====================================================================
+        // TEST 3: Simultaneous Terminations & Arbitration
+        // =====================================================================
+        $display("\n--- [TEST 3] Simultaneous Terminations (Arbitration) ---");
+        // Allocate 3 cores first
+        allocate_task(10'h200, 4'd1, 10'd0, core_a); // core 0
+        allocate_task(10'h201, 4'd2, 10'd0, core_b); // core 1
+        allocate_task(10'h202, 4'd3, 10'd0, core_c); // core 2
+        
+        @(posedge clk);
+        // Assert all 3 done signals at the exact same time
+        core_done_vec[core_a] = 1'b1;
+        core_done_vec[core_b] = 1'b1;
+        core_done_vec[core_c] = 1'b1;
+
+        // Expect Core 0 to be acked first (Priority Encoder LSB logic)
+        @(posedge clk); #1;
+        assert_eq(done_ack, 1'b1, "T3: Expected ACK for Core 0");
+        assert_eq(core_id_cmt_core, core_a, "T3: Core 0 should win arbitration");
+        core_done_vec[core_a] = 1'b0; // Core 0 drops its line
+
+        // Expect Core 1 to be acked next
+        @(posedge clk); #1;
+        assert_eq(done_ack, 1'b1, "T3: Expected ACK for Core 1");
+        assert_eq(core_id_cmt_core, core_b, "T3: Core 1 should be handled next");
+        core_done_vec[core_b] = 1'b0; // Core 1 drops its line
+
+        // Expect Core 2 to be acked last
+        @(posedge clk); #1;
+        assert_eq(done_ack, 1'b1, "T3: Expected ACK for Core 2");
+        assert_eq(core_id_cmt_core, core_c, "T3: Core 2 should be handled last");
+        core_done_vec[core_c] = 1'b0; // Core 2 drops its line
+
+        // =====================================================================
+        // TEST 4: Saturation (64 Cores Busy) & Graceful Release
+        // =====================================================================
+        $display("\n--- [TEST 4] Saturation (All 64 Cores) ---");
+        reset_system();
+        
+        for (int i = 0; i < 64; i++) begin
+            logic [5:0] temp_core;
+            allocate_task(10'h300 + i, i % 16, 10'd0, temp_core);
+        end
+        
+        @(posedge clk); #1;
+        assert_eq(ava_core_valid, 1'b0, "T4: ava_core_valid MUST be 0 when all 64 cores are busy");
+        assert_eq(uut.core_busy, 64'hFFFF_FFFF_FFFF_FFFF, "T4: All core_busy bits should be 1");
+
+        // Release Core 42
+        $display("T4: Releasing Core 42 to check immediate availability...");
+        core_terminate(6'd42);
+        
+        @(posedge clk); #1;
+        assert_eq(ava_core_valid, 1'b1, "T4: Core 42 released, valid should be 1");
+        assert_eq(ava_core_id, 6'd42, "T4: Core 42 should be the available core");
+
+        // =====================================================================
+        // TEST 5: FDIR - Invalid Termination ID Injection
+        // =====================================================================
+        $display("\n--- [TEST 5] FDIR: Invalid Termination ---");
+        // Right now, Core 10 is NOT busy. Let's make it assert 'done'.
+        assert_eq(uut.core_busy[10], 1'b0, "T5: Pre-condition: Core 10 must not be busy");
+        
+        @(posedge clk);
+        core_done_vec[10] = 1'b1;
+        
+        @(posedge clk); #1;
+        assert_eq(err, 2'b10, "T5: Error injected! Err should be 2'b10 (Invalid Termination ID)");
+        core_done_vec[10] = 1'b0; // clear
+
+        @(posedge clk); #1;
+        assert_eq(err, 2'b00, "T5: Error should clear in the next cycle");
+
+        // =====================================================================
+        // END OF VERIFICATION
+        // =====================================================================
+        $display("\n===============================================================");
+        if (error_count == 0) begin
+            $display("\033[0;32m   VERIFICATION PASSED! \033[0m");
+            $display("   All %0d assertions passed with flying colors.", pass_count);
         end else begin
-            $display("[TC5] WARNING: ava_core_valid is still high even after mass allocations!");
+            $display("\033[0;31m   VERIFICATION FAILED \033[0m");
+            $display("   Found %0d errors during testing.", error_count);
         end
-        #20;
-
-        // =====================================================================
-        // TC6: Gradual release and Immediate Availability
-        // Description: When the system is full, clear a single core (e.g., Core 5)
-        // and verify that ava_core_valid asserts in the next cycle, offering Core 5.
-        // =====================================================================
-        $display("[TC6] Testing Immediate Availability by clearing Core 5...");
-        @(posedge clk);
-        core_done_vec[5] = 1'b1; // Core 5 signals completion
-        
-        @(posedge clk);
-        #1;
-        if (done_ack && (core_id_cmt_core == 6'd5)) begin
-            core_done_vec[5] = 1'b0; // Lower completion line
-        end
-        
-        // Wait one clock cycle for internal status update
-        @(posedge clk);
-        #1;
-        if (ava_core_valid && (ava_core_id == 6'd5)) begin
-            $display("[TC6] Success: Core 5 freed up and immediately marked as AVAILABLE.");
-        end else begin
-            $display("[TC6] Error: Core 5 was freed but not allocated/available correctly.");
-        end
-        #20;
-
-        // =====================================================================
-        // TC7: Done -> Ack Handshake Protocol Verification
-        // Description: Simulate a core holding its done signal high for multiple cycles
-        // (e.g., Core 10), and verify CMT generates only a single done_ack pulse.
-        // =====================================================================
-        $display("[TC7] Testing Core Handshake duration holding done high...");
-        @(posedge clk);
-        core_done_vec[10] = 1'b1; // Core 10 finishes
-        
-        // Intentionally hold the signal high for 3 clock cycles (independent of ACK)
-        repeat (3) begin
-            @(posedge clk);
-            #1;
-            if (done_ack) begin
-                $display("[TC7] CMT generated done_ack for Core ID: %d", core_id_cmt_core);
-            end
-        end
-        
-        @(posedge clk);
-        core_done_vec[10] = 1'b0; // Clear the signal at the end of the process
-        #50;
-
-        // =====================================================================
-        // TC8: Multi-Instance / Duplication (Single Task with Multiple Replicas)
-        // Description: A single task (Task ID = 0x1F) needs to be executed 3 times in parallel.
-        // TMT allocates it to 3 different cores sequentially, updating the Instance Number.
-        // =====================================================================
-        $display("[TC8] Starting Multi-Instance Allocation for Task 0x1F (3 Instances)...");
-        
-        // --- Instance 0 ---
-        @(posedge clk);
-        if (ava_core_valid) begin
-            $display("[TC8] Allocating Task 0x1F, Instance 0 to Core ID: %d", ava_core_id);
-            task_id_tmt_cmt      = 10'h1F;       // Same Task ID
-            tmt_idx_tmt_cmt      = 4'd5;         // Same TMT row
-            instance_num_tmt_cmt = 10'd0;        // Instance #0
-            tmt_cmt_ack          = 1;
-        end
-        @(posedge clk);
-        tmt_cmt_ack = 0;
-        #10; // Brief delay between allocations
-
-        // --- Instance 1 ---
-        @(posedge clk);
-        if (ava_core_valid) begin
-            $display("[TC8] Allocating Task 0x1F, Instance 1 to Core ID: %d", ava_core_id);
-            task_id_tmt_cmt      = 10'h1F;       // Same Task ID
-            tmt_idx_tmt_cmt      = 4'd5;         // Same TMT row
-            instance_num_tmt_cmt = 10'd1;        // Instance #1
-            tmt_cmt_ack          = 1;
-        end
-        @(posedge clk);
-        tmt_cmt_ack = 0;
-        #10;
-
-        // --- Instance 2 ---
-        @(posedge clk);
-        if (ava_core_valid) begin
-            $display("[TC8] Allocating Task 0x1F, Instance 2 to Core ID: %d", ava_core_id);
-            task_id_tmt_cmt      = 10'h1F;       // Same Task ID
-            tmt_idx_tmt_cmt      = 4'd5;         // Same TMT row
-            instance_num_tmt_cmt = 10'd2;        // Instance #2
-            tmt_cmt_ack          = 1;
-        end
-        @(posedge clk);
-        tmt_cmt_ack = 0;
-        #30;
-
-        // --- Simulating Gradual Termination of Replicas ---
-        $display("[TC8] Simulating termination of the instances...");
-        
-        // Assume the first replica (e.g., captured by Core 12) finishes
-        @(posedge clk);
-        core_done_vec[12] = 1'b1; 
-        
-        @(posedge clk);
-        #1;
-        if (task_done_pulse && (terminated_tmt_idx == 4'd5)) begin
-            $display("[TC8] Success: CMT reported termination of an instance from TMT row 5");
-        end
-        
-        @(posedge clk);
-        core_done_vec[12] = 1'b0;
-        #20;
-
-        // End of all simulation steps
-        $display("--- All test cases completed successfully! ---");
+        $display("===============================================================\n");
         $finish;
     end
 
