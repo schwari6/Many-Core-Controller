@@ -38,22 +38,22 @@ module cmt (
     // -------------------------------------------------------------------------
     // Combinational Logic: Priority Encoder for Idle Core (Allocation)
     // -------------------------------------------------------------------------
-    reg       idle_valid_comb;
-    reg [5:0] idle_core_id_comb;
+    reg        idle_valid_comb;
+    reg [5:0]  idle_core_id_comb;
     
-    // שלב 1: מציאת הביט הראשון שנקבע ל-1 (האינדקס הנמוך ביותר שאינו עסוק) באמצעות Masking
+    // Step 1: Find the first bit set to 1 (lowest non-busy index) using masking
     wire [63:0] core_idle = ~core_busy;
     wire [63:0] lowest_idle_bit;
     
-    // טריק חומרה קלאסי: מבודד את ה-LSB ששווה ל-1
+    // Classic hardware trick: isolates the Least Significant Bit (LSB) that equals 1
     assign lowest_idle_bit = core_idle & (~core_idle + 1'b1);
 
-    // שלב 2: קידוד ה-Bit Vector החד-חם (One-Hot) שקיבלנו לערך בינארי של 6 ביט
+    // Step 2: Encode the obtained One-Hot bit vector into a 6-bit binary value
     always @(*) begin
-        idle_valid_comb   = |core_idle; // תקף אם לפחות ליבה אחת פנויה
+        idle_valid_comb   = |core_idle; // Valid if at least one core is idle
         idle_core_id_comb = 6'd0;
         
-        // עץ לוגי מקבילי (OR-Tree) לקידוד המיקום
+        // Parallel logic tree (OR-Tree) for position encoding
         idle_core_id_comb[0] = |(lowest_idle_bit & 64'hAAAAAAAAAAAAAAAA);
         idle_core_id_comb[1] = |(lowest_idle_bit & 64'hCCCCCCCCCCCCCCCC);
         idle_core_id_comb[2] = |(lowest_idle_bit & 64'hF0F0F0F0F0F0F0F0);
@@ -68,21 +68,21 @@ module cmt (
     // -------------------------------------------------------------------------
     // Combinational Logic: Priority Encoder for Terminated Core (Arbitration)
     // -------------------------------------------------------------------------
-    reg       term_valid_comb;
-    reg [5:0] term_core_id_comb;
+    reg        term_valid_comb;
+    reg [5:0]  term_core_id_comb;
 
-    // שלב 1: בידוד ה-LSB ששווה ל-1 (האינדקס הנמוך ביותר שסיים)
+    // Step 1: Isolate the LSB that equals 1 (lowest index that has finished)
     wire [63:0] lowest_done_bit;
     
-    // טריק חומרה קלאסי: משאיר רק את ה-1 הימני ביותר דולק ומאפס את כל השאר
+    // Classic hardware trick: leaves only the rightmost 1 active and clears the rest
     assign lowest_done_bit = i_core_done_vec & (~i_core_done_vec + 1'b1);
 
-    // שלב 2: קידוד ה-Bit Vector החד-חם (One-Hot) לערך בינארי של 6 ביט
+    // Step 2: Encode the One-Hot bit vector into a 6-bit binary value
     always @(*) begin
-        term_valid_comb   = |i_core_done_vec; // תקף אם לפחות ליבה אחת סיימה
+        term_valid_comb   = |i_core_done_vec; // Valid if at least one core has finished
         term_core_id_comb = 6'd0;
         
-        // עץ לוגי מקבילי (OR-Tree) לקידוד המיקום ב-O(log N)
+        // Parallel logic tree (OR-Tree) for position encoding in O(log N)
         term_core_id_comb[0] = |(lowest_done_bit & 64'hAAAAAAAAAAAAAAAA);
         term_core_id_comb[1] = |(lowest_done_bit & 64'hCCCCCCCCCCCCCCCC);
         term_core_id_comb[2] = |(lowest_done_bit & 64'hF0F0F0F0F0F0F0F0);
@@ -90,12 +90,13 @@ module cmt (
         term_core_id_comb[4] = |(lowest_done_bit & 64'hFFFF0000FFFF0000);
         term_core_id_comb[5] = |(lowest_done_bit & 64'hFFFFFFFF00000000);
     end
+
     // -------------------------------------------------------------------------
     // Sequential Logic: State Updates
     // -------------------------------------------------------------------------
     always @(posedge i_clk or negedge i_rst_n) begin
         if (!i_rst_n) begin
-            core_busy          <= 64'd0;
+            core_busy            <= 64'd0;
             o_task_done_pulse    <= 1'b0;
             o_terminated_tmt_idx <= 4'd0;
             o_done_ack           <= 1'b0;
