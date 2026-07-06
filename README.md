@@ -10,5 +10,5 @@ Hardware design and verification of a high-performance Many-Core Controller for 
 ├── tb/                  # Verification Environment (Testbenches)
 ├── scripts/             # Automation scripts
 ├── docs/                # Architecture Specifications & Block Diagrams
-├── articles/	        	 # The base articles of the project
+├── articles/	         # The base articles of the project
 └── README.md            # Project description and setup guide

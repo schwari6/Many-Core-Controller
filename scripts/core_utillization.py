@@ -8,13 +8,13 @@ import os
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Navigate relative to the script location to find REPORTS/
-LOG_FILE_PATH = os.path.join(SCRIPT_DIR, '../REPORTS/sim_log.txt')
-OUTPUT_IMAGE  = os.path.join(SCRIPT_DIR, '../REPORTS/core_utilization_graph.png')
+LOG_FILE_PATH = os.path.join(SCRIPT_DIR, '../reports/sim_log.txt')
+OUTPUT_IMAGE  = os.path.join(SCRIPT_DIR, '../reports/core_utilization_graph.png')
 
 def main():
     if not os.path.exists(LOG_FILE_PATH):
         print(f"Error: The file '{LOG_FILE_PATH}' was not found.")
-        print("Please run the simulation first and save the log in the REPORTS directory.")
+        print("Please run the simulation first and save the log in the reports directory.")
         return
 
     times = []

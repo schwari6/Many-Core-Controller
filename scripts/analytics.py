@@ -2,8 +2,8 @@ import matplotlib.pyplot as plt
 import os
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE_PATH = os.path.join(SCRIPT_DIR, '../REPORTS/sim_log.txt')
-OUTPUT_IMAGE = os.path.join(SCRIPT_DIR, '../REPORTS/graph_3_analytics.png')
+LOG_FILE_PATH = os.path.join(SCRIPT_DIR, '../reports/sim_log.txt')
+OUTPUT_IMAGE = os.path.join(SCRIPT_DIR, '../reports/graph_3_analytics.png')
 
 def main():
     if not os.path.exists(LOG_FILE_PATH):

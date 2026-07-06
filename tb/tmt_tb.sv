@@ -61,9 +61,9 @@ module tmt_tb();
     int error_count = 0;
     int pass_count  = 0;
     
-    // Associative array to track where tasks were stored internally
-    // task_id -> tmt_idx
-    int task_location_map[int]; 
+    // Associative map to track where tasks were stored internally
+    // task_id -> tmt_idx (Increased to 1024 to support 10-bit Task IDs without memory crash)
+    int task_location_map[1024];
 
     // -------------------------------------------------------------------------
     // Clock Generation & Watchdog
@@ -114,7 +114,6 @@ module tmt_tb();
         #1;
         fifo_tmt_data = {id, quota, addr, dep, 2'b00};
         empty = 0;
-        
         // Wait for ACK
         wait(tmt_fifo_ack == 1'b1);
         @(posedge clk);
@@ -123,24 +122,28 @@ module tmt_tb();
         fifo_tmt_data = 64'h0;
     endtask
 
-    // Allocate a core and capture the assigned TMT Index
+    // Allocate a core and capture the assigned TMT Index (Fixed to 1-cycle pulse)
     task allocate_core(input [5:0] core_id, output [9:0] out_task_id, output [3:0] out_tmt_idx);
         @(posedge clk);
         #1;
         ava_core_valid = 1;
         ava_core_id = core_id;
         
-        // Wait for allocation ACK
-        wait(tmt_cmt_ack == 1'b1);
+        // Exact 1 cycle pulse to prevent accidental double-allocations on multi-instance tasks
+        @(posedge clk);
+        #1;
+        ava_core_valid = 0;
+
+        // If tmt_cmt_ack is not 1 yet, wait for it
+        if (tmt_cmt_ack !== 1'b1) begin
+            wait(tmt_cmt_ack == 1'b1);
+        end
+        
         out_task_id = task_id_tmt_cmt;
         out_tmt_idx = tmt_idx_tmt_cmt;
         
         // Map it for later termination
         task_location_map[out_task_id] = out_tmt_idx;
-        
-        @(posedge clk);
-        #1;
-        ava_core_valid = 0;
     endtask
 
     // Terminate an instance of a task
@@ -195,7 +198,7 @@ module tmt_tb();
         assert_eq(uut.trf_valid[allocated_idx], 1'b0, "T1: TRF Slot should be freed after termination");
 
         // =====================================================================
-        // TEST 2: Deep Dependency Chain (Task 300 -> 200 -> 100)
+        // TEST 2: Deep Dependency Chain (Task 30 -> 20 -> 10)
         // =====================================================================
         $display("\n--- [TEST 2] Deep Dependency Chain ---");
         
@@ -207,8 +210,8 @@ module tmt_tb();
         // Only Task 10 should be ready. Let's allocate it.
         allocate_core(6'd1, allocated_task, allocated_idx);
         assert_eq(allocated_task, 10'd10, "T2: Only Task 10 should be ready to allocate");
-        
-        // Try to allocate Task 20 prematurely (Should Timeout/Fail if we block, but we use a trick)
+
+        // Try to allocate Task 20 prematurely 
         ava_core_valid = 1;
         ava_core_id = 6'd2;
         @(posedge clk); #1;
@@ -217,7 +220,7 @@ module tmt_tb();
 
         // Terminate Task 10 -> Resolves Task 20's dependency
         terminate_task_instance(allocated_idx);
-        
+
         // Now Task 20 should be ready
         allocate_core(6'd2, allocated_task, allocated_idx);
         assert_eq(allocated_task, 10'd20, "T2: Task 20 should now be allocated");
@@ -265,16 +268,6 @@ module tmt_tb();
         // =====================================================================
         // TEST 4: FDIR Deadlock Detection (Err = 01)
         // =====================================================================
-        // To trigger the deadlock in this RTL:
-        // 1. TRF must be FULL (valid = FFFF)
-        // 2. NO task can be in READY state (!ready_valid_comb)
-        // We achieve this by:
-        // Task 0: Has no dependency, Quota = 10.
-        // Task 1-15: Depend on Task 0.
-        // Then we allocate ALL 10 instances of Task 0. 
-        // Task 0 state goes to ALLOCATED (not READY). 
-        // Tasks 1-15 are PENDING (waiting for Task 0 to terminate).
-        // Boom -> TRF Full + No Ready Slots = Deadlock Err.
         $display("\n--- [TEST 4] FDIR Deadlock Detection ---");
         reset_system();
         
